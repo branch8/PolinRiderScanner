@@ -222,14 +222,6 @@ log_scan_complete() {
     log_msg "Total repos: ${TOTAL_REPOS}, Infected: ${INFECTED_REPOS}"
 }
 
-init_progress_ui() {
-    if [ -t 1 ]; then
-        PROGRESS_UI=1
-    else
-        PROGRESS_UI=0
-    fi
-}
-
 prompt_keep_repos() {
     if [ "$CLEAN_REPO" -eq 1 ]; then
         return  # already decided via --clean-repo flag
@@ -287,6 +279,12 @@ _colorize_log_line() {
 }
 
 init_progress_ui() {
+    if [ -t 1 ]; then
+        PROGRESS_UI=1
+    else
+        PROGRESS_UI=0
+        return
+    fi
     TERM_LINES=$(tput lines 2>/dev/null || printf '24')
     local scroll_end=$((TERM_LINES - BAR_HEIGHT))
     # Restrict scrolling to upper portion; bottom BAR_HEIGHT rows are fixed
@@ -490,6 +488,36 @@ clear_progress_line() {
     fi
 }
 
+render_listing_spinner() {
+    local owner="$1"
+    local sidx="$2"
+    [ "$PROGRESS_UI" -ne 1 ] && return
+
+    local spinner
+    case $((sidx % 10)) in
+        0) spinner="⠋" ;; 1) spinner="⠙" ;; 2) spinner="⠹" ;; 3) spinner="⠸" ;;
+        4) spinner="⠼" ;; 5) spinner="⠴" ;; 6) spinner="⠦" ;; 7) spinner="⠧" ;;
+        8) spinner="⠇" ;; *) spinner="⠏" ;;
+    esac
+    local _sc
+    case $((sidx % 4)) in
+        0) _sc="$CYAN" ;; 1) _sc="$GREEN" ;; 2) _sc="$YELLOW" ;; *) _sc="$MAGENTA" ;;
+    esac
+
+    local bar_row=$((TERM_LINES - BAR_HEIGHT + 1))
+    printf "\033[s"
+    printf "\033[%d;1H\033[2K" "$bar_row"
+    { [ "$VERBOSE" -eq 1 ] || [ "$VERBOSE_DETAIL" -eq 1 ]; } && \
+        printf "${DIM}──────────────────── scan log ───────────────────────${RESET}"
+    printf "\033[%d;1H\033[2K" "$((bar_row + 1))"
+    printf "${_sc}%s${RESET} ${BOLD}${CYAN}[org: %s]${RESET}  ${DIM}Listing repositories...${RESET}" \
+        "$spinner" "$owner"
+    printf "\033[%d;1H\033[2K" "$((bar_row + 2))"
+    printf "\033[%d;1H\033[2K" "$((bar_row + 3))"
+    printf "  ${DIM}status:${RESET}   Fetching repo list from GitHub API..."
+    printf "\033[u"
+}
+
 # ---------------------------------------------------------------------------
 # scan_bare_repo — scans a bare git clone using git grep + git show
 # No checkout needed. Scans ALL branches.
@@ -621,7 +649,22 @@ REFSEOF
             local content
             content="$(git -C "$bare_dir" show "${ref}:${filepath}" 2>/dev/null)" || continue
 
-            # Classify which signature(s) this file matches
+            # WOFF2 fake font files get their own tag
+            case "$filepath" in
+                *.woff2|*.woff)
+                    if grep -qF "$V1_MARKER" <<<"$content"; then
+                        printf 'FINDING\t%s\t%s\t[WOFF2] Fake font file with V1 payload (%s)\n' "$branch" "$filepath" "$V1_MARKER" >> "$results_file"
+                    fi
+                    if grep -qF "$V2_MARKER" <<<"$content"; then
+                        printf 'FINDING\t%s\t%s\t[WOFF2] Fake font file with V2 payload (%s)\n' "$branch" "$filepath" "$V2_MARKER" >> "$results_file"
+                    fi
+                    if grep -qF "$V1_GLOBAL" <<<"$content" || grep -qF "$V2_GLOBAL" <<<"$content" || grep -qF "$COMMON_GLOBAL_R" <<<"$content"; then
+                        printf 'FINDING\t%s\t%s\t[WOFF2] Fake font file with PolinRider global marker\n' "$branch" "$filepath" >> "$results_file"
+                    fi
+                    continue  # skip normal config checks for woff2 files
+                    ;;
+            esac
+            # Classify JS config signatures
             if grep -qF "$V1_MARKER" <<<"$content"; then
                 printf 'FINDING\t%s\t%s\t[V1] Obfuscated payload detected — decoder marker "%s" found\n' "$branch" "$filepath" "$V1_MARKER" >> "$results_file"
             fi
@@ -1022,6 +1065,31 @@ REFSEOF
         rm -f "$pfile"
     done
 
+    # --- Pass NODE_MOD: committed node_modules with malicious packages ---
+    local nodemod_out
+    nodemod_out=$(mktemp)
+    local old_ifs="$IFS"; IFS=' '
+    for mal_pkg in $MALICIOUS_NPM_PKGS; do
+        # shellcheck disable=SC2086
+        git -c grep.threads=2 -C "$bare_dir" grep -lF "\"${mal_pkg}\"" \
+            $all_refs -- ":(glob)**/node_modules/${mal_pkg}/package.json" >> "$nodemod_out" 2>/dev/null || true
+    done
+    IFS="$old_ifs"
+    if [ -s "$nodemod_out" ]; then
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            local pkg_name
+            pkg_name="$(echo "$filepath" | sed 's|.*node_modules/\([^/]*\)/.*|\1|')"
+            printf 'FINDING\t%s\t%s\t[NODE_MOD] Malicious package committed in node_modules: %s\n' "$branch" "$filepath" "$pkg_name" >> "$results_file"
+        done < "$nodemod_out"
+    fi
+    rm -f "$nodemod_out"
+
     # Deduplicate results
     if [ -s "$results_file" ]; then
         local deduped
@@ -1149,9 +1217,25 @@ scan_github_owner() {
 
     log_msg "[${owner}] Listing repositories..."
 
-    local repo_json
-    repo_json="$(gh repo list "$owner" --limit 1000 --json nameWithOwner -q '.[].nameWithOwner' 2>&1)"
-    local gh_exit=$?
+    local repo_json gh_exit _fetch_out _fetch_pid _sidx=0
+    if [ "$PROGRESS_UI" -eq 1 ]; then
+        _fetch_out="$(mktemp)"
+        gh repo list "$owner" --limit 1000 --json nameWithOwner -q '.[].nameWithOwner' \
+            > "$_fetch_out" 2>&1 &
+        _fetch_pid=$!
+        while kill -0 "$_fetch_pid" 2>/dev/null; do
+            render_listing_spinner "$owner" "$_sidx"
+            _sidx=$((_sidx + 1))
+            sleep 0.15
+        done
+        wait "$_fetch_pid"; gh_exit=$?
+        repo_json="$(cat "$_fetch_out")"
+        rm -f "$_fetch_out"
+    else
+        repo_json="$(gh repo list "$owner" --limit 1000 --json nameWithOwner -q '.[].nameWithOwner' 2>&1)"
+        gh_exit=$?
+    fi
+
     if [ "$gh_exit" -ne 0 ]; then
         log_msg "[${owner}] ERROR: gh repo list failed: ${repo_json}"
         return 1
@@ -1290,6 +1374,144 @@ GHREPOEOF
     # Generate text report (always)
     generate_text_report "$owner" "$repo_count" "$GITHUB_RESULTS_DIR"
 
+    # ── 回寫 tracking CSV ──────────────────────────────────────────────────────
+    local _scan_csv
+    _scan_csv="$(cd "$(dirname "$0")" && pwd)/polinrider-branch8-tracking.csv"
+    if [ -f "$_scan_csv" ]; then
+        log_msg "[${owner}] Updating tracking CSV..."
+        python3 - "$GITHUB_RESULTS_DIR" "$_scan_csv" "$(date +%Y-%m-%d)" <<'CSVEOF'
+import sys, os, csv
+from collections import defaultdict
+from datetime import datetime
+
+results_dir, csv_path, today = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def categorize(filepath, desc):
+    fp = filepath.lower()
+    if fp.endswith('.woff2') or fp.endswith('.woff') or '[WOFF2]' in desc:
+        return 'WOFF2'
+    if '[FAKE FONTS README]' in desc:
+        return 'WOFF2'
+    if '[SUPPLY CHAIN]' in desc or '[NODE_MOD]' in desc:
+        return 'NPM_PKG'
+    if '[C2]' in desc:
+        return 'C2'
+    if '[PROPAGATION]' in desc:
+        return 'GITIGNORE' if '.gitignore' in fp else 'PROPAGATION'
+    if '[RCE]' in desc or '[PROMPT INJECTION]' in desc or '[EXFILTRATION]' in desc:
+        return 'IDE_RCE'
+    if '[SUSPICIOUS]' in desc:
+        return 'IDE_RCE' if any(x in fp for x in ['.vscode','.cursor','.claude']) else 'JS_CONFIG'
+    if any(t in desc for t in ['[V1]','[V2]','[IOC]','[V1 CONFIRMED]','[V2 CONFIRMED]']):
+        return 'JS_CONFIG'
+    return 'OTHER'
+
+# category -> CSV column name
+CAT_COL = {
+    'WOFF2':       'woff2_fake',
+    'GITIGNORE':   'gitignore_inject',
+    'JS_CONFIG':   'js_config',
+    'NPM_PKG':     'npm_malicious',
+    'PROPAGATION': 'bat_script',
+    'C2':          'c2',
+    'IDE_RCE':     'ide_rce',
+}
+# Fake README falls under WOFF2 column for simplicity, also mark fake_readme
+FAKE_README_COL = 'fake_readme'
+
+# Parse scan results
+repo_findings = defaultdict(lambda: defaultdict(int))  # repo -> cat -> count
+repo_scan_status = {}  # repo -> 'INFECTED' | 'CLEAN'
+
+for fname in sorted(os.listdir(results_dir)):
+    fpath = os.path.join(results_dir, fname)
+    if not os.path.isfile(fpath): continue
+    try: lines = open(fpath).readlines()
+    except: continue
+    repo = None
+    for line in lines:
+        line = line.rstrip('\n')
+        if line.startswith('repo='):
+            repo = line[5:]
+            if fname.endswith('.log'):
+                repo_scan_status[repo] = 'INFECTED'
+            elif fname.endswith('.clean'):
+                repo_scan_status.setdefault(repo, 'CLEAN')
+        elif line.startswith('FINDING\t') and repo:
+            parts = line.split('\t', 3)
+            if len(parts) == 4:
+                _, branch, filepath, desc = parts
+                cat = categorize(filepath, desc)
+                repo_findings[repo][cat] += 1
+                if '[FAKE FONTS README]' in desc:
+                    repo_findings[repo]['FAKE_README'] += 1
+
+if not os.path.isfile(csv_path):
+    print(f"CSV not found: {csv_path}")
+    sys.exit(0)
+
+rows = []
+updated = 0
+with open(csv_path) as f:
+    reader = csv.DictReader(f)
+    fieldnames = reader.fieldnames
+    for row in reader:
+        repo = row.get('repo','')
+        if repo not in repo_scan_status:
+            rows.append(row)
+            continue
+
+        scan_st = repo_scan_status[repo]
+        findings = repo_findings.get(repo, {})
+        old_status = row.get('status','')
+
+        # Update last_scan
+        row['last_scan'] = today
+
+        # Update category columns
+        for cat, col in CAT_COL.items():
+            if col not in (fieldnames or []):
+                continue
+            if findings.get(cat, 0) > 0:
+                new_val = 'FOUND'
+            elif scan_st == 'CLEAN':
+                new_val = 'CLEAN'
+            else:
+                new_val = row.get(col, '-')
+            row[col] = new_val
+
+        # fake_readme column
+        if FAKE_README_COL in (fieldnames or []):
+            if findings.get('FAKE_README', 0) > 0:
+                row[FAKE_README_COL] = 'FOUND'
+            elif scan_st == 'CLEAN':
+                row[FAKE_README_COL] = 'CLEAN'
+
+        # Re-infection detection
+        if scan_st == 'INFECTED' and old_status == 'CLEANED':
+            count = int(row.get('reinfected_count', '0') or '0')
+            row['reinfected_count'] = str(count + 1)
+            existing_notes = row.get('notes', '')
+            row['notes'] = (existing_notes + ' | ' if existing_notes else '') + f'RE-INFECTED {today}'
+            row['status'] = 'INFECTED'
+            print(f"  RE-INFECTION detected: {repo}")
+        elif scan_st == 'INFECTED' and old_status not in ('CLEANED', 'SKIP', 'FALSE_POSITIVE'):
+            row['status'] = 'INFECTED'
+        elif scan_st == 'CLEAN' and old_status not in ('CLEANED', 'HISTORY', 'SKIP', 'FALSE_POSITIVE'):
+            pass  # don't downgrade CLEANED to CLEAN automatically
+
+        rows.append(row)
+        updated += 1
+
+with open(csv_path, 'w', newline='') as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+
+print(f"  CSV updated: {updated} rows, {len([r for r in rows if repo_findings.get(r.get('repo',''),{})])} with findings")
+CSVEOF
+    fi
+
     # Keep .clean files when JSON output is requested (used by generate_json_report).
     if [ "$LOG_JSON" -ne 1 ]; then
         rm -f "${GITHUB_RESULTS_DIR}"/*.clean 2>/dev/null
@@ -1354,6 +1576,128 @@ BRDETAILEOF
         printf "Infected:       %d\n" "$infected_count"
         printf "Clean:          %d\n" "$clean_count"
         printf "\n"
+
+        # ── Repo-level & Branch-level tables ──────────────────────────────────
+        python3 - "$results_dir" "$timestamp" <<'PYEOF'
+import sys, os
+from collections import defaultdict
+
+results_dir, scan_time = sys.argv[1], sys.argv[2]
+
+def categorize(filepath, desc):
+    fp = filepath.lower()
+    if fp.endswith('.woff2') or fp.endswith('.woff') or '[WOFF2]' in desc:
+        return 'WOFF2'
+    if '[FAKE FONTS README]' in desc:
+        return 'WOFF2'
+    if '[SUPPLY CHAIN]' in desc or '[NODE_MOD]' in desc:
+        return 'NPM_PKG'
+    if '[C2]' in desc:
+        return 'C2'
+    if '[PROPAGATION]' in desc:
+        return 'GITIGNORE' if '.gitignore' in fp else 'PROPAGATION'
+    if '[RCE]' in desc or '[PROMPT INJECTION]' in desc or '[EXFILTRATION]' in desc:
+        return 'IDE_RCE'
+    if '[SUSPICIOUS]' in desc:
+        return 'IDE_RCE' if any(x in fp for x in ['.vscode','.cursor','.claude']) else 'JS_CONFIG'
+    if any(t in desc for t in ['[V1]','[V2]','[IOC]','[V1 CONFIRMED]','[V2 CONFIRMED]']):
+        return 'JS_CONFIG'
+    return 'OTHER'
+
+CATS = ['WOFF2','GITIGNORE','JS_CONFIG','NPM_PKG','PROPAGATION','C2','IDE_RCE']
+repo_cats = defaultdict(lambda: defaultdict(int))
+repo_status = {}
+branch_rows = []
+seen_bf = set()
+
+for fname in sorted(os.listdir(results_dir)):
+    fpath = os.path.join(results_dir, fname)
+    if not os.path.isfile(fpath): continue
+    try: lines = open(fpath).readlines()
+    except: continue
+    repo = None
+    for line in lines:
+        line = line.rstrip('\n')
+        if line.startswith('repo='):
+            repo = line[5:]
+            if fname.endswith('.clean'):   repo_status.setdefault(repo, 'CLEAN')
+            elif fname.endswith('.history'):
+                if repo_status.get(repo,'CLEAN') == 'CLEAN': repo_status[repo] = 'HISTORY'
+            elif fname.endswith('.log'):   repo_status[repo] = 'INFECTED'
+        elif line.startswith('FINDING\t') and repo:
+            parts = line.split('\t', 3)
+            if len(parts) == 4:
+                _, branch, filepath, desc = parts
+                cat = categorize(filepath, desc)
+                repo_cats[repo][cat] += 1
+                key = (repo, branch, cat, filepath)
+                if key not in seen_bf:
+                    seen_bf.add(key)
+                    branch_rows.append((repo, branch, cat, filepath, desc))
+
+all_repos = sorted(set(list(repo_status.keys()) + list(repo_cats.keys())))
+order = {'INFECTED':0,'HISTORY':1,'CLEAN':2}
+all_repos.sort(key=lambda r:(order.get(repo_status.get(r,'CLEAN'),3), r))
+
+R,C,S,T = 50,9,10,16
+HDRS = ['WOFF2','GITIGNORE','JS_CFG','NPM_PKG','PROPAGT','C2','IDE_RCE']
+ll = lambda s,n: s[:n].ljust(n)
+hl = lambda s,n: s[:n].center(n)
+sep = lambda c: '-'*c
+
+top = '+' + sep(R) + '+' + (sep(C)+'+')*(len(CATS)) + sep(S) + '+' + sep(T) + '+'
+mid = top
+bot = top
+
+def hrow():
+    r = '|' + ll('Repo',R) + '|'
+    for h in HDRS: r += hl(h,C) + '|'
+    return r + hl('Status',S) + '|' + hl('Scan Date',T) + '|'
+
+def drow(repo):
+    cats = repo_cats.get(repo,{})
+    st = repo_status.get(repo,'?')
+    r = '|' + ll(repo,R) + '|'
+    for cat in CATS: r += hl('YES' if cats.get(cat,0)>0 else '-',C) + '|'
+    return r + hl(st,S) + '|' + hl(scan_time[:T],T) + '|'
+
+W = R+C*len(CATS)+S+T+len(CATS)+3
+print(); print('='*W); print('REPO-LEVEL SUMMARY'); print('='*W)
+print(top); print(hrow()); print(mid)
+last_st=None
+for repo in all_repos:
+    st=repo_status.get(repo,'?')
+    if last_st is not None and last_st!=st: print(mid)
+    last_st=st
+    print(drow(repo))
+print(bot)
+n_inf=sum(1 for r in all_repos if repo_status.get(r)=='INFECTED')
+n_his=sum(1 for r in all_repos if repo_status.get(r)=='HISTORY')
+n_cln=sum(1 for r in all_repos if repo_status.get(r)=='CLEAN')
+print(f'  {len(all_repos)} repos  |  INFECTED: {n_inf}  HISTORY: {n_his}  CLEAN: {n_cln}')
+
+if branch_rows:
+    branch_rows.sort(key=lambda x:(x[0],x[1],x[2]))
+    BR,BB,BT,BF = 50,28,12,50
+    bsep = lambda c:'-'*c
+    btop = '+'+bsep(BR)+'+'+bsep(BB)+'+'+bsep(BT)+'+'+bsep(BF)+'+'
+    print(); print('='*(BR+BB+BT+BF+5))
+    print(f'BRANCH-LEVEL FINDINGS  (scan: {scan_time})')
+    print('='*(BR+BB+BT+BF+5))
+    print(btop)
+    print('|'+ll('Repo',BR)+'|'+ll('Branch',BB)+'|'+ll('Category',BT)+'|'+ll('File',BF)+'|')
+    print('+'+bsep(BR)+'+'+bsep(BB)+'+'+bsep(BT)+'+'+bsep(BF)+'+')
+    last_r=None
+    for repo,branch,cat,filepath,desc in branch_rows:
+        if last_r and last_r!=repo:
+            print('+'+bsep(BR)+'+'+bsep(BB)+'+'+bsep(BT)+'+'+bsep(BF)+'+')
+        last_r=repo
+        print('|'+ll(repo,BR)+'|'+ll(branch,BB)+'|'+ll(cat,BT)+'|'+ll(filepath,BF)+'|')
+    print('+'+bsep(BR)+'+'+bsep(BB)+'+'+bsep(BT)+'+'+bsep(BF)+'+')
+    print(f'  {len(branch_rows)} branch findings')
+else:
+    print(); print('BRANCH-LEVEL FINDINGS: None')
+PYEOF
 
         if [ "$infected_count" -gt 0 ]; then
             printf "INFECTED REPOSITORIES:\n"

@@ -447,34 +447,34 @@ check_file_for_signatures() {
 
     # Variant 1 checks — each indicator reported independently
     if grep -qF "$V1_MARKER" "$filepath" 2>/dev/null; then
-        findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: Variant 1 payload (rmcej%%otb%%) detected\n"
+        findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Variant 1 payload (rmcej%%otb%%) detected\n"
         found=$((found + 1))
     fi
     if grep -qF "$V1_DECODER" "$filepath" 2>/dev/null; then
-        findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: Variant 1 decoder (_\$_1e42) detected\n"
+        findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Variant 1 decoder (_\$_1e42) detected\n"
         found=$((found + 1))
     fi
     if grep -qF "$V1_GLOBAL" "$filepath" 2>/dev/null; then
         if grep -qF "$V1_SEED" "$filepath" 2>/dev/null || grep -qF "$V1_SEED2" "$filepath" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: Variant 1 markers (global['!'] + seed) detected\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Variant 1 markers (global['!'] + seed) detected\n"
             found=$((found + 1))
         else
-            findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: PolinRider global['!'] assignment (variant 1 marker)\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: PolinRider global['!'] assignment (variant 1 marker)\n"
             found=$((found + 1))
         fi
     fi
 
     # Variant 2 checks — each indicator reported independently
     if grep -qF "$V2_MARKER" "$filepath" 2>/dev/null; then
-        findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: Variant 2 payload (Cot%%3t=shtP) detected\n"
+        findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Variant 2 payload (Cot%%3t=shtP) detected\n"
         found=$((found + 1))
     fi
     if grep -qF "$V2_GLOBAL" "$filepath" 2>/dev/null; then
         if grep -qF "$V2_SEED" "$filepath" 2>/dev/null || grep -qF "$V2_SEED2" "$filepath" 2>/dev/null || grep -qF "$V2_DECODER" "$filepath" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: Variant 2 markers (global['_V'] + seed/decoder) detected\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Variant 2 markers (global['_V'] + seed/decoder) detected\n"
             found=$((found + 1))
         else
-            findings="${findings}  ${RED}-${RESET} ${BOLD}${label}${RESET}: PolinRider global['_V'] assignment (variant 2 marker)\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: PolinRider global['_V'] assignment (variant 2 marker)\n"
             found=$((found + 1))
         fi
     fi
@@ -483,7 +483,7 @@ check_file_for_signatures() {
     if grep -qF "$COMMON_GLOBAL_R" "$filepath" 2>/dev/null && grep -qF "$COMMON_GLOBAL_M" "$filepath" 2>/dev/null; then
         if grep -qF "$V1_SEED" "$filepath" 2>/dev/null || grep -qF "$V1_SEED2" "$filepath" 2>/dev/null || \
            grep -qF "$V2_SEED" "$filepath" 2>/dev/null || grep -qF "$V2_SEED2" "$filepath" 2>/dev/null; then
-            findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${label}${RESET}: Suspicious global['r']/global['m'] with known seed\n"
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: Suspicious global['r']/global['m'] with known seed\n"
             found=$((found + 1))
         fi
     fi
@@ -493,7 +493,7 @@ check_file_for_signatures() {
         if grep -qF "$COMMON_GLOBAL_R" "$filepath" 2>/dev/null || \
            grep -qF "$V1_GLOBAL" "$filepath" 2>/dev/null || \
            grep -qF "$V2_GLOBAL" "$filepath" 2>/dev/null; then
-            findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${label}${RESET}: eval() with PolinRider global markers — possible partially cleaned infection\n"
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${label}${RESET}: eval() with PolinRider global markers — possible partially cleaned infection\n"
             found=$((found + 1))
         fi
     fi
@@ -561,23 +561,23 @@ PKGDIREOF
             local woff_hit=0
 
             if grep -qF "$V1_MARKER" "$woff_file" 2>/dev/null; then
-                findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 1 payload (rmcej%%otb%%)\n"
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[WOFF2]${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 1 payload (rmcej%%otb%%)\n"
                 woff_hit=1
             fi
             if grep -qF "$V2_MARKER" "$woff_file" 2>/dev/null; then
-                findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 2 payload (Cot%%3t=shtP)\n"
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[WOFF2]${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 2 payload (Cot%%3t=shtP)\n"
                 woff_hit=1
             fi
             # For short decoder names, require a second corroborating marker
             if [ "$woff_hit" -eq 0 ]; then
                 if grep -qF "$V1_DECODER" "$woff_file" 2>/dev/null && \
                    grep -qF "$V1_GLOBAL" "$woff_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 1 markers\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[WOFF2]${RESET} ${BOLD}${relpath}${RESET}: Fake font file with variant 1 markers\n"
                     woff_hit=1
                 fi
                 if grep -qF "$COMMON_GLOBAL_R" "$woff_file" 2>/dev/null && \
                    grep -qF "$COMMON_GLOBAL_M" "$woff_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Fake font file with PolinRider global markers\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[WOFF2]${RESET} ${BOLD}${relpath}${RESET}: Fake font file with PolinRider global markers\n"
                     woff_hit=1
                 fi
             fi
@@ -603,7 +603,7 @@ WOFFEOF
                 local relpath="${readme_file#${repo_dir}/}"
                 local fontdir
                 fontdir="$(dirname "$relpath")"
-                findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Fabricated fonts README (PolinRider decoy) — delete entire ${fontdir}/ directory\n"
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[FAKE_README]${RESET} ${BOLD}${relpath}${RESET}: Fabricated fonts README (PolinRider decoy) — delete entire ${fontdir}/ directory\n"
                 finding_count=$((finding_count + 1))
             fi
         fi
@@ -636,10 +636,10 @@ JSEOF
         if grep -qF "LAST_COMMIT_DATE" "${repo_dir}/temp_auto_push.bat" 2>/dev/null || \
            grep -qF "--no-verify" "${repo_dir}/temp_auto_push.bat" 2>/dev/null || \
            grep -qF "git push -uf" "${repo_dir}/temp_auto_push.bat" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}temp_auto_push.bat${RESET}: PolinRider propagation script (confirmed by content)\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}temp_auto_push.bat${RESET}: PolinRider propagation script (confirmed by content)\n"
             CLEANUP_BAT_FILES+=("${repo_dir}/temp_auto_push.bat")
         else
-            findings="${findings}  ${YELLOW}-${RESET} ${BOLD}temp_auto_push.bat${RESET}: Propagation script found (verify manually)\n"
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}temp_auto_push.bat${RESET}: Propagation script found (verify manually)\n"
         fi
         finding_count=$((finding_count + 1))
     fi
@@ -648,10 +648,10 @@ JSEOF
            grep -qF "--no-verify" "${repo_dir}/config.bat" 2>/dev/null || \
            grep -qF "git push -uf" "${repo_dir}/config.bat" 2>/dev/null || \
            grep -qF "temp_auto_push" "${repo_dir}/config.bat" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}config.bat${RESET}: PolinRider hidden orchestrator (confirmed by content)\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}config.bat${RESET}: PolinRider hidden orchestrator (confirmed by content)\n"
             CLEANUP_BAT_FILES+=("${repo_dir}/config.bat")
         else
-            findings="${findings}  ${YELLOW}-${RESET} ${BOLD}config.bat${RESET}: Hidden orchestrator found (verify manually)\n"
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}config.bat${RESET}: Hidden orchestrator found (verify manually)\n"
         fi
         finding_count=$((finding_count + 1))
     fi
@@ -660,12 +660,12 @@ JSEOF
     if [ -f "${repo_dir}/.gitignore" ]; then
         local gi_hit=0
         if grep -qxF "config.bat" "${repo_dir}/.gitignore" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}.gitignore${RESET}: config.bat entry injected\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[GITIGNORE]${RESET} ${BOLD}.gitignore${RESET}: config.bat entry injected\n"
             finding_count=$((finding_count + 1))
             gi_hit=1
         fi
         if grep -qxF "temp_auto_push.bat" "${repo_dir}/.gitignore" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}.gitignore${RESET}: temp_auto_push.bat entry injected\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[GITIGNORE]${RESET} ${BOLD}.gitignore${RESET}: temp_auto_push.bat entry injected\n"
             finding_count=$((finding_count + 1))
             gi_hit=1
         fi
@@ -684,7 +684,7 @@ JSEOF
                 if grep -qF "detached" "$filepath" 2>/dev/null || \
                    grep -qF "windowsHide" "$filepath" 2>/dev/null; then
                     local relpath="${filepath#${repo_dir}/}"
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: child_process.spawn with detached/hidden execution\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: child_process.spawn with detached/hidden execution\n"
                     finding_count=$((finding_count + 1))
                 fi
             fi
@@ -712,7 +712,7 @@ JSEOF
 
             # StakingGame UUID
             if grep -qF "$STAKING_UUID" "$ide_file" 2>/dev/null; then
-                findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: StakingGame weaponized template UUID found\n"
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[JS_CONFIG]${RESET} ${BOLD}${relpath}${RESET}: StakingGame weaponized template UUID found\n"
                 ide_hit=1
             fi
 
@@ -721,7 +721,7 @@ JSEOF
             IFS=' '
             for domain in $C2_DOMAINS; do
                 if grep -qF "$domain" "$ide_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: C2 domain reference (${domain})\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[C2]${RESET} ${BOLD}${relpath}${RESET}: C2 domain reference (${domain})\n"
                     ide_hit=1
                 fi
             done
@@ -730,7 +730,7 @@ JSEOF
             # Blockchain C2 addresses
             for addr in "$TRON_ADDR_1" "$TRON_ADDR_2" "$APTOS_HASH_1" "$APTOS_HASH_2"; do
                 if grep -qF "$addr" "$ide_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Blockchain C2 address reference (${addr})\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[C2]${RESET} ${BOLD}${relpath}${RESET}: Blockchain C2 address reference (${addr})\n"
                     ide_hit=1
                 fi
             done
@@ -738,10 +738,10 @@ JSEOF
             # curl|bash / wget|sh auto-execution (tasks.json, settings.json, etc.)
             if grep -qE '(curl|wget).*\|.*(bash|sh)' "$ide_file" 2>/dev/null; then
                 if grep -qF "folderOpen" "$ide_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: curl|bash with runOn:folderOpen auto-execution\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: curl|bash with runOn:folderOpen auto-execution\n"
                     ide_hit=1
                 else
-                    findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${relpath}${RESET}: curl|bash command in IDE config — verify manually\n"
+                    findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: curl|bash command in IDE config — verify manually\n"
                     ide_hit=1
                 fi
             fi
@@ -751,7 +751,7 @@ JSEOF
                 if grep -qF "global[" "$ide_file" 2>/dev/null || \
                    grep -qF "child_process" "$ide_file" 2>/dev/null || \
                    grep -qF "eval(" "$ide_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: node -e with suspicious payload in IDE config\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: node -e with suspicious payload in IDE config\n"
                     ide_hit=1
                 fi
             fi
@@ -766,7 +766,7 @@ JSEOF
                     # Shell command injection via prompt instructions
                     if grep -qiE '(run|execute|shell|bash|system)\s*\(' "$ide_file" 2>/dev/null || \
                        grep -qiE '(subprocess|os\.system|child_process|execSync)' "$ide_file" 2>/dev/null; then
-                        findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${relpath}${RESET}: Shell/command execution reference in agent config — verify manually\n"
+                        findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: Shell/command execution reference in agent config — verify manually\n"
                         ide_hit=1
                     fi
                     # External URL — skip for .cursor/rules|commands|skills (legitimately contain Jira/Teams URLs)
@@ -774,29 +774,29 @@ JSEOF
                     case "$relpath" in .cursor/rules/*|.cursor/commands/*|.cursor/skills/*) _skip_url=1 ;; esac
                     if [ "$_skip_url" -eq 0 ]; then
                         if grep -qiE '(curl|wget|fetch|http|https)://' "$ide_file" 2>/dev/null; then
-                            findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${relpath}${RESET}: External URL in agent config — potential exfiltration vector\n"
+                            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: External URL in agent config — potential exfiltration vector\n"
                             ide_hit=1
                         fi
                     fi
                     # Base64-encoded payloads hidden in agent config
                     if grep -qE '[A-Za-z0-9+/]{60,}={0,2}' "$ide_file" 2>/dev/null; then
-                        findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${relpath}${RESET}: Long base64 string in agent config — verify manually\n"
+                        findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: Long base64 string in agent config — verify manually\n"
                         ide_hit=1
                     fi
                     # Instruction override / role hijacking
                     if grep -qiE '(ignore previous|ignore above|disregard|forget all|new instructions|you are now|act as|pretend)' "$ide_file" 2>/dev/null; then
-                        findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Prompt injection pattern (instruction override) detected\n"
+                        findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: Prompt injection pattern (instruction override) detected\n"
                         ide_hit=1
                     fi
                     # Hidden unicode / zero-width characters used to hide malicious instructions
                     if grep -qP '[\x{200B}\x{200C}\x{200D}\x{2060}\x{FEFF}]' "$ide_file" 2>/dev/null; then
-                        findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Hidden zero-width unicode characters — possible concealed instructions\n"
+                        findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: Hidden zero-width unicode characters — possible concealed instructions\n"
                         ide_hit=1
                     fi
                     # SSH/credential/token/secret references
                     if grep -qiE '(ssh_key|private_key|api_key|secret|token|password|credential)' "$ide_file" 2>/dev/null; then
                         if grep -qiE '(read|cat|send|upload|post|exfil|steal|extract)' "$ide_file" 2>/dev/null; then
-                            findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Credential access + exfiltration pattern in agent config\n"
+                            findings="${findings}  ${RED}-${RESET} ${CYAN}[IDE_RCE]${RESET} ${BOLD}${relpath}${RESET}: Credential access + exfiltration pattern in agent config\n"
                             ide_hit=1
                         fi
                     fi
@@ -815,7 +815,7 @@ IDEEOF
     # Only flag if the malicious npm dep is present alongside the template name
     if [ -f "${repo_dir}/client/package.json" ]; then
         if grep -qF "tailwindcss-style-animate" "${repo_dir}/client/package.json" 2>/dev/null; then
-            findings="${findings}  ${RED}-${RESET} ${BOLD}client/package.json${RESET}: ShoeVista weaponized template (tailwindcss-style-animate dependency)\n"
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_PKG]${RESET} ${BOLD}client/package.json${RESET}: ShoeVista weaponized template (tailwindcss-style-animate dependency)\n"
             finding_count=$((finding_count + 1))
         fi
     fi
@@ -828,7 +828,7 @@ IDEEOF
                grep -qF "$sv_name" "${repo_dir}/package.json" 2>/dev/null; then
                 if grep -qF "tailwindcss-style-animate" "${repo_dir}/package.json" 2>/dev/null || \
                    [ -d "${repo_dir}/client" ] && [ -d "${repo_dir}/server" ]; then
-                    findings="${findings}  ${YELLOW}-${RESET} ${BOLD}package.json${RESET}: Possible ShoeVista weaponized template (name '${sv_name}' + client/server structure)\n"
+                    findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[NPM_PKG]${RESET} ${BOLD}package.json${RESET}: Possible ShoeVista weaponized template (name '${sv_name}' + client/server structure)\n"
                     finding_count=$((finding_count + 1))
                 fi
             fi
@@ -846,7 +846,7 @@ IDEEOF
             IFS=' '
             for mal_pkg in $MALICIOUS_NPM_PKGS; do
                 if grep -qF "\"${mal_pkg}\"" "$pkg_file" 2>/dev/null; then
-                    findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Malicious npm dependency '${mal_pkg}'\n"
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_PKG]${RESET} ${BOLD}${relpath}${RESET}: Malicious npm dependency '${mal_pkg}'\n"
                     finding_count=$((finding_count + 1))
                 fi
             done
@@ -868,7 +868,7 @@ tailwindcss-writing-mode|tailwindcss-border-gradient|tailwindcss-dir|\
 @savvywombat/tailwindcss-grid-areas|tailwindcss-fluid-type|\
 tailwindcss-children|tailwindcss-multi|tailwindcss-primeui|\
 tailwindcss-react-aria-components|tw-animate-css) ;;
-                            *) findings="${findings}  ${YELLOW}-${RESET} ${BOLD}${relpath}${RESET}: Suspicious tailwind package '${tw_dep}' — verify manually\n"
+                            *) findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[NPM_PKG]${RESET} ${BOLD}${relpath}${RESET}: Suspicious tailwind package '${tw_dep}' — verify manually\n"
                                finding_count=$((finding_count + 1)) ;;
                         esac
                     fi
@@ -897,7 +897,7 @@ PKGEOF
                 elif grep -rqF "$V2_MARKER" "$nm_dir" --include="*.js" 2>/dev/null; then
                     payload_confirmed=" (payload confirmed — V2)"
                 fi
-                findings="${findings}  ${RED}-${RESET} ${BOLD}${relpath}${RESET}: Malicious package installed: ${mal_pkg}${payload_confirmed}\n"
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[NODE_MOD]${RESET} ${BOLD}${relpath}${RESET}: Malicious package installed: ${mal_pkg}${payload_confirmed}\n"
                 finding_count=$((finding_count + 1))
                 local nm_parent
                 nm_parent="$(dirname "$nm_dir")"
@@ -1676,6 +1676,31 @@ print_final_report() {
         printf "  Possible FP     : ${YELLOW}${BOLD}%d${RESET} ${DIM}(review manually — see below)${RESET}\n" "$FALSE_POSITIVE_COUNT"
     fi
     printf "\n"
+
+    # Category breakdown
+    if [ "$INFECTED_REPOS" -gt 0 ]; then
+        local _c_woff2 _c_fake _c_git _c_js _c_npm _c_prop _c_c2 _c_ide _c_node
+        _c_woff2=$(printf '%b'   "$INFECTED_REPO_DETAIL" | grep -c '\[WOFF2\]'      2>/dev/null || echo 0)
+        _c_fake=$(printf '%b'    "$INFECTED_REPO_DETAIL" | grep -c '\[FAKE_README\]' 2>/dev/null || echo 0)
+        _c_git=$(printf '%b'     "$INFECTED_REPO_DETAIL" | grep -c '\[GITIGNORE\]'   2>/dev/null || echo 0)
+        _c_js=$(printf '%b'      "$INFECTED_REPO_DETAIL" | grep -c '\[JS_CONFIG\]'   2>/dev/null || echo 0)
+        _c_npm=$(printf '%b'     "$INFECTED_REPO_DETAIL" | grep -c '\[NPM_PKG\]'     2>/dev/null || echo 0)
+        _c_prop=$(printf '%b'    "$INFECTED_REPO_DETAIL" | grep -c '\[PROPAGATION\]' 2>/dev/null || echo 0)
+        _c_c2=$(printf '%b'      "$INFECTED_REPO_DETAIL" | grep -c '\[C2\]'          2>/dev/null || echo 0)
+        _c_ide=$(printf '%b'     "$INFECTED_REPO_DETAIL" | grep -c '\[IDE_RCE\]'     2>/dev/null || echo 0)
+        _c_node=$(printf '%b'    "$INFECTED_REPO_DETAIL" | grep -c '\[NODE_MOD\]'    2>/dev/null || echo 0)
+        printf "${BOLD}INFECTION CATEGORIES${RESET}\n"
+        printf "  %-22s %s\n" "WOFF2 (fake fonts):"      "${_c_woff2}"
+        printf "  %-22s %s\n" "FAKE_README (decoy):"     "${_c_fake}"
+        printf "  %-22s %s\n" "GITIGNORE (pollution):"   "${_c_git}"
+        printf "  %-22s %s\n" "JS_CONFIG (injection):"   "${_c_js}"
+        printf "  %-22s %s\n" "NPM_PKG (supply chain):"  "${_c_npm}"
+        printf "  %-22s %s\n" "PROPAGATION (.bat):"      "${_c_prop}"
+        printf "  %-22s %s\n" "C2 (command&control):"    "${_c_c2}"
+        printf "  %-22s %s\n" "IDE_RCE (TasksJacker):"   "${_c_ide}"
+        printf "  %-22s %s\n" "NODE_MOD (committed):"    "${_c_node}"
+        printf "\n"
+    fi
 
     # Infected repos
     if [ "$INFECTED_REPOS" -gt 0 ]; then
