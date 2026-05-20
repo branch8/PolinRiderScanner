@@ -717,6 +717,9 @@ JSEOF
         while IFS= read -r ide_file; do
             if [ ! -f "$ide_file" ]; then continue; fi
             local relpath="${ide_file#${repo_dir}/}"
+            # Skip .claude/worktrees/ — these are legitimate Claude Code git worktrees,
+            # not agent config files; scanning them produces high false-positive rates.
+            case "$relpath" in .claude/worktrees/*|.cursor/worktrees/*) continue ;; esac
             local ide_hit=0
 
             # Payload signature checks (all dirs)
