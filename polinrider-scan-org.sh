@@ -633,7 +633,7 @@ REFSEOF
         ':(glob)**/App.js' ':(glob)**/app.js' ':(glob)**/index.js' \
         ':(glob)**/babel.config.js' ':(glob)**/jest.config.js' ':(glob)**/truffle.js' \
         ':(glob)**/*.woff' ':(glob)**/*.woff2' \
-        ':(glob)**/temp_auto_push.bat' ':(glob)**/config.bat' \
+        ':(glob)**/temp_auto_push.bat' ':(glob)**/temp_interactive_push.bat' ':(glob)**/config.bat' \
         ':(glob)**/.vscode/*' ':(glob)**/.cursor/*' ':(glob)**/.claude/*' \
         ':(glob)**/package.json'
 
@@ -847,7 +847,7 @@ REFSEOF
             fi
             # Propagation script check (only for .bat files)
             case "$filepath" in
-                *temp_auto_push.bat|*config.bat)
+                *temp_auto_push.bat|*temp_interactive_push.bat|*config.bat)
                     if grep -qF "LAST_COMMIT_DATE" <<<"$content"; then
                         printf 'FINDING\t%s\t%s\t[PROPAGATION] Auto-push script detected — spreads infection to other repos via git\n' "$branch" "$filepath" >> "$results_file"
                     fi
@@ -863,6 +863,7 @@ REFSEOF
     # shellcheck disable=SC2086
     git -c grep.threads=4 -C "$bare_dir" grep -lF \
         -e "temp_auto_push.bat" \
+        -e "temp_interactive_push.bat" \
         $all_refs -- ':(glob)**/.gitignore' > "$gitignore_out" 2>/dev/null || true
 
     if [ -s "$gitignore_out" ]; then
@@ -873,7 +874,7 @@ REFSEOF
             if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
             local branch="${ref#refs/heads/}"
             case "$branch" in origin/*|*/HEAD) continue ;; esac
-            printf 'FINDING\t%s\t%s\t[PROPAGATION] .gitignore hides PolinRider propagation scripts (temp_auto_push.bat)\n' "$branch" "$filepath" >> "$results_file"
+            printf 'FINDING\t%s\t%s\t[PROPAGATION] .gitignore hides PolinRider propagation scripts (temp_auto_push.bat / temp_interactive_push.bat)\n' "$branch" "$filepath" >> "$results_file"
         done < "$gitignore_out"
     fi
     rm -f "$gitignore_out"

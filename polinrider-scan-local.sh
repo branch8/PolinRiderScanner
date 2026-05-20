@@ -643,6 +643,17 @@ JSEOF
         fi
         finding_count=$((finding_count + 1))
     fi
+    if [ -f "${repo_dir}/temp_interactive_push.bat" ]; then
+        if grep -qF "LAST_COMMIT_DATE" "${repo_dir}/temp_interactive_push.bat" 2>/dev/null || \
+           grep -qF "--no-verify" "${repo_dir}/temp_interactive_push.bat" 2>/dev/null || \
+           grep -qF "git push -uf" "${repo_dir}/temp_interactive_push.bat" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}temp_interactive_push.bat${RESET}: PolinRider propagation script variant (confirmed by content)\n"
+            CLEANUP_BAT_FILES+=("${repo_dir}/temp_interactive_push.bat")
+        else
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[PROPAGATION]${RESET} ${BOLD}temp_interactive_push.bat${RESET}: Propagation script variant found (verify manually)\n"
+        fi
+        finding_count=$((finding_count + 1))
+    fi
     if [ -f "${repo_dir}/config.bat" ]; then
         if grep -qF "LAST_COMMIT_DATE" "${repo_dir}/config.bat" 2>/dev/null || \
            grep -qF "--no-verify" "${repo_dir}/config.bat" 2>/dev/null || \
@@ -666,6 +677,11 @@ JSEOF
         fi
         if grep -qxF "temp_auto_push.bat" "${repo_dir}/.gitignore" 2>/dev/null; then
             findings="${findings}  ${RED}-${RESET} ${CYAN}[GITIGNORE]${RESET} ${BOLD}.gitignore${RESET}: temp_auto_push.bat entry injected\n"
+            finding_count=$((finding_count + 1))
+            gi_hit=1
+        fi
+        if grep -qxF "temp_interactive_push.bat" "${repo_dir}/.gitignore" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[GITIGNORE]${RESET} ${BOLD}.gitignore${RESET}: temp_interactive_push.bat entry injected (variant)\n"
             finding_count=$((finding_count + 1))
             gi_hit=1
         fi
@@ -956,7 +972,7 @@ REFSEOF
                     ':(glob)**/App.js' ':(glob)**/app.js' ':(glob)**/index.js' \
                     ':(glob)**/babel.config.js' ':(glob)**/jest.config.js' ':(glob)**/truffle.js' \
                     ':(glob)**/*.woff' ':(glob)**/*.woff2' \
-                    ':(glob)**/temp_auto_push.bat' ':(glob)**/config.bat' \
+                    ':(glob)**/temp_auto_push.bat' ':(glob)**/temp_interactive_push.bat' ':(glob)**/config.bat' \
                     ':(glob)**/.vscode/*' ':(glob)**/.cursor/*' ':(glob)**/.claude/*' \
                     ':(glob)**/package.json' \
                     > "$gg_out_file" 2>/dev/null &
@@ -1470,9 +1486,12 @@ scan_temp_dirs() {
 $(find "$tmp_dir" \( -name "*.js" -o -name "*.bat" -o -name "*.sh" -o -name "*.mjs" \) -type f -maxdepth 3 2>/dev/null 2>/dev/null | head -500)
 TMPEOF
 
-            # Check for temp_auto_push.bat specifically
+            # Check for propagation script variants in temp
             if [ -f "${tmp_dir}/temp_auto_push.bat" ]; then
                 add_system_finding "TEMP" "Propagation script in temp: ${tmp_dir}/temp_auto_push.bat"
+            fi
+            if [ -f "${tmp_dir}/temp_interactive_push.bat" ]; then
+                add_system_finding "TEMP" "Propagation script variant in temp: ${tmp_dir}/temp_interactive_push.bat"
             fi
         fi
     done
@@ -1565,7 +1584,7 @@ perform_cleanup() {
     fi
 
     if [ "${#CLEANUP_GITIGNORE_REPOS[@]}" -gt 0 ]; then
-        printf "${BOLD}.gitignore entries to remove (config.bat / temp_auto_push.bat):${RESET}\n"
+        printf "${BOLD}.gitignore entries to remove (config.bat / temp_auto_push.bat / temp_interactive_push.bat):${RESET}\n"
         for repo_d in "${CLEANUP_GITIGNORE_REPOS[@]}"; do
             printf "  ${RED}-${RESET} %s/.gitignore\n" "$repo_d"
         done
