@@ -1029,6 +1029,30 @@ SIGSEOF
     fi
     rm -f "$gm_out"
 
+    # --- Pass 7h: .vscode/ folder presence (policy + TasksJacker delivery surface) ---
+    local vscode_out
+    vscode_out=$(mktemp)
+    # shellcheck disable=SC2086
+    git -c grep.threads=4 -C "$bare_dir" grep -l "" $all_refs -- ':(glob)**/.vscode/*' > "$vscode_out" 2>/dev/null || true
+    if [ -s "$vscode_out" ]; then
+        declare -A _vscode_branches=()
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            case "$filepath" in */.vscode/worktrees/*|*/.claude/worktrees/*) continue ;; esac
+            if [ -z "${_vscode_branches[$branch]:-}" ]; then
+                _vscode_branches[$branch]=1
+                printf 'FINDING\t%s\t.vscode/\t[IDE_LEAK] IDE config tracked in repo — remove entire .vscode/ folder (TasksJacker delivery surface)\n' "$branch" >> "$results_file"
+            fi
+        done < "$vscode_out"
+        unset _vscode_branches
+    fi
+    rm -f "$vscode_out"
+
     # --- Pass 8: IDE config compound checks (curl|bash + folderOpen) ---
     _ep "IDE configs..."
     local curl_out

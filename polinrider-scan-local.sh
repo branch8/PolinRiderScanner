@@ -725,6 +725,27 @@ JSEOF
     IFS="$old_ifs_cp"
 
     # --- IDE/agent config directories (.vscode, .cursor, .claude) ---
+    # Policy: IDE config should not be committed to a project repo. Even a
+    # benign-looking .vscode/ is the TasksJacker delivery surface. Flag any
+    # tracked .vscode directory as a finding so it gets removed in remediation.
+    if [ -d "${repo_dir}/.vscode" ]; then
+        # Only flag if it's actually tracked by git (avoid false positives on
+        # local-only .vscode that's already in .gitignore)
+        local _vscode_tracked=0
+        if [ -d "${repo_dir}/.git" ]; then
+            if git -C "$repo_dir" ls-files .vscode 2>/dev/null | grep -q .; then
+                _vscode_tracked=1
+            fi
+        else
+            # Bare clone or non-git directory: presence alone counts
+            _vscode_tracked=1
+        fi
+        if [ "$_vscode_tracked" -eq 1 ]; then
+            findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[IDE_LEAK]${RESET} ${BOLD}.vscode/${RESET}: IDE config tracked in repo — remove entire folder (delivery surface for TasksJacker)\n"
+            finding_count=$((finding_count + 1))
+        fi
+    fi
+
     for ide_dir_name in $IDE_CONFIG_DIRS; do
         local ide_dir="${repo_dir}/${ide_dir_name}"
         if [ ! -d "$ide_dir" ]; then continue; fi

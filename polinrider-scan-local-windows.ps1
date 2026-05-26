@@ -747,6 +747,21 @@ function Scan-Repo ([string]$RepoDir) {
             }
         }
 
+    # --- .vscode/ folder presence (policy + TasksJacker delivery surface) ---
+    $vscodeDir = Join-Path $RepoDir '.vscode'
+    if (Test-Path $vscodeDir) {
+        $vscodeTracked = $true
+        if (Test-Path (Join-Path $RepoDir '.git')) {
+            # Only flag if tracked (avoid local-only .vscode false positives)
+            $lsTracked = & git -C $RepoDir ls-files .vscode 2>$null
+            if (-not $lsTracked) { $vscodeTracked = $false }
+        }
+        if ($vscodeTracked) {
+            Add-RepoFinding '.vscode/' '[IDE_LEAK] IDE config tracked in repo — remove entire folder (TasksJacker delivery surface)' 'MEDIUM'
+            $findingCount++
+        }
+    }
+
     # --- Git hooks scan (working-tree .git/hooks, NOT branch contents) ---
     $hooksDir = Join-Path $RepoDir '.git\hooks'
     if (Test-Path $hooksDir) {

@@ -1106,6 +1106,39 @@ REFSEOF
     fi
     rm -f "$gm_out"
 
+    # --- Pass 5h: .vscode/ folder presence (policy + TasksJacker delivery surface) ---
+    # IDE config should not be in production repos. Even a benign-looking
+    # .vscode/ is the TasksJacker delivery surface. Emit one finding per
+    # branch that has any tracked .vscode/ file.
+    local vscode_out
+    vscode_out=$(mktemp)
+    # shellcheck disable=SC2086
+    git -C "$bare_dir" ls-tree -r --name-only $all_refs 2>/dev/null | head -1 >/dev/null || true
+    # Use git grep with a pattern that matches anything (we just need filenames)
+    # shellcheck disable=SC2086
+    git -c grep.threads=4 -C "$bare_dir" grep -l "" $all_refs -- ':(glob)**/.vscode/*' > "$vscode_out" 2>/dev/null || true
+    if [ -s "$vscode_out" ]; then
+        # Group by branch — emit one finding per (branch, top-level .vscode path)
+        declare -A _vscode_branches=()
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            # Skip nested worktrees (already handled in IDE_RCE scan)
+            case "$filepath" in */.vscode/worktrees/*|*/.claude/worktrees/*) continue ;; esac
+            # One emit per branch
+            if [ -z "${_vscode_branches[$branch]:-}" ]; then
+                _vscode_branches[$branch]=1
+                printf 'FINDING\t%s\t.vscode/\t[IDE_LEAK] IDE config tracked in repo — remove entire .vscode/ folder (TasksJacker delivery surface)\n' "$branch" >> "$results_file"
+            fi
+        done < "$vscode_out"
+        unset _vscode_branches
+    fi
+    rm -f "$vscode_out"
+
     # --- Passes 6-10: IDE config checks (run in parallel) ---
     _ep "IDE configs..."
     local ide_results_8 ide_results_9 ide_results_10 ide_results_11 ide_results_12
