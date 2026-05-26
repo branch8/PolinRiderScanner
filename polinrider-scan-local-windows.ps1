@@ -632,6 +632,121 @@ function Scan-Repo ([string]$RepoDir) {
         }
     }
 
+    # --- npm scripts.* content scan ---
+    Get-ChildItem $RepoDir -Recurse -Filter 'package.json' -File -Depth 4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if (-not $content.Contains('"scripts"')) { return }
+            if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[NPM_SCRIPT] curl|bash in npm scripts (auto-run on install/build)' 'HIGH'; $findingCount++
+            }
+            if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[NPM_SCRIPT] base64-decoded shell exec in npm scripts' 'HIGH'; $findingCount++
+            }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                Add-RepoFinding $rel '[NPM_SCRIPT] PolinRider obfuscator signature in package.json' 'HIGH'; $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "[NPM_SCRIPT] C2 domain in package.json ($c2)" 'HIGH'; $findingCount++
+                }
+            }
+        }
+
+    # --- .gitmodules URL allowlist ---
+    $gmFile = Join-Path $RepoDir '.gitmodules'
+    if (Test-Path $gmFile) {
+        $gmAllow = @('github.com/','gitlab.com/','codeberg.org/','bitbucket.org/')
+        $gmContent = Get-FileContent $gmFile
+        if ($gmContent) {
+            [regex]::Matches($gmContent, '(?m)^\s*url\s*=\s*(.+?)\s*$') | ForEach-Object {
+                $url = $_.Groups[1].Value.Trim()
+                $matched = $false
+                foreach ($prefix in $gmAllow) {
+                    $prefixNoSlash = $prefix.TrimEnd('/')
+                    if ($url -like "https://$prefix*" -or $url -like "http://$prefix*" -or $url -like "git@${prefixNoSlash}:*" -or $url -like "ssh://git@${prefixNoSlash}/*") {
+                        $matched = $true; break
+                    }
+                }
+                if (-not $matched) {
+                    Add-RepoFinding '.gitmodules' "[SUBMODULE] submodule URL outside allowlist: $url" 'MEDIUM'; $findingCount++
+                }
+            }
+        }
+    }
+
+    # --- Dockerfile / docker-compose.yml scan ---
+    Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'Dockerfile','Dockerfile.*','docker-compose*.yml','docker-compose*.yaml','compose.yml','compose.yaml' |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[DOCKER_RCE] curl|bash in Dockerfile/compose' 'HIGH'; $findingCount++
+            }
+            if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[DOCKER_RCE] base64-decoded shell exec in Dockerfile/compose' 'HIGH'; $findingCount++
+            }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                Add-RepoFinding $rel '[DOCKER_PAYLOAD] PolinRider obfuscator signature in Dockerfile/compose' 'HIGH'; $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "[DOCKER_C2] C2 domain in Dockerfile/compose ($c2)" 'HIGH'; $findingCount++
+                }
+            }
+        }
+
+    # --- Makefile scan ---
+    Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'Makefile','makefile','GNUmakefile','*.mk' |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[MAKE_RCE] curl|bash in Makefile target' 'HIGH'; $findingCount++
+            }
+            if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[MAKE_RCE] base64-decoded shell exec in Makefile' 'HIGH'; $findingCount++
+            }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                Add-RepoFinding $rel '[MAKE_PAYLOAD] PolinRider obfuscator signature in Makefile' 'HIGH'; $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "[MAKE_C2] C2 domain in Makefile ($c2)" 'HIGH'; $findingCount++
+                }
+            }
+        }
+
+    # --- Monorepo / build-tool config scan ---
+    Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'turbo.json','nx.json','lerna.json','rush.json','pnpm-workspace.yaml','workspace.json' |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[MONOREPO_RCE] curl|bash in monorepo config' 'HIGH'; $findingCount++
+            }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                Add-RepoFinding $rel '[MONOREPO_PAYLOAD] PolinRider obfuscator signature in monorepo config' 'HIGH'; $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "[MONOREPO_C2] C2 domain in monorepo config ($c2)" 'HIGH'; $findingCount++
+                }
+            }
+        }
+
     # --- Git hooks scan (working-tree .git/hooks, NOT branch contents) ---
     $hooksDir = Join-Path $RepoDir '.git\hooks'
     if (Test-Path $hooksDir) {

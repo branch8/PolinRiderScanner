@@ -1055,6 +1055,148 @@ $(find "${repo_dir}/.git/hooks" -maxdepth 1 -type f 2>/dev/null)
 HOOKEOF
     fi
 
+    # --- npm scripts.* content scan (preinstall / postinstall / etc.) ---
+    # Look for shell injection / V1/V2 markers / C2 inside the "scripts" block.
+    # We grep package.json for the patterns; matches in url/description/etc.
+    # fields are rare and acceptable (manual verification step).
+    while IFS= read -r pkg_file; do
+        [ -f "$pkg_file" ] || continue
+        local relpath="${pkg_file#${repo_dir}/}"
+        # Only check files that have a "scripts" object
+        grep -q '"scripts"' "$pkg_file" 2>/dev/null || continue
+        if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' "$pkg_file" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_SCRIPT]${RESET} ${BOLD}${relpath}${RESET}: curl|bash in npm scripts (auto-run on install/build)\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' "$pkg_file" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_SCRIPT]${RESET} ${BOLD}${relpath}${RESET}: base64-decoded shell exec in npm scripts\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qF "$V1_MARKER" "$pkg_file" 2>/dev/null || grep -qF "$V2_MARKER" "$pkg_file" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_SCRIPT]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature in package.json\n"
+            finding_count=$((finding_count + 1))
+        fi
+        old_ifs="$IFS"
+        IFS=' '
+        for c2 in $C2_DOMAINS; do
+            if grep -qF "$c2" "$pkg_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_SCRIPT]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in package.json (${c2})\n"
+                finding_count=$((finding_count + 1))
+            fi
+        done
+        IFS="$old_ifs"
+    done <<NPMSCRIPTEOF
+$(find "$repo_dir" -name "package.json" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 4 2>/dev/null)
+NPMSCRIPTEOF
+
+    # --- .gitmodules URL allowlist ---
+    # Flag submodules pointing anywhere outside trusted hosts. Adjust GITMODULES_ALLOW
+    # to match your org. Default allowlist: github.com (any owner), gitlab.com, codeberg.org.
+    # Stricter setups should set GITMODULES_ALLOW='github.com/branch8/'.
+    local gm_file="${repo_dir}/.gitmodules"
+    if [ -f "$gm_file" ]; then
+        local gm_allow="${GITMODULES_ALLOW:-github.com/ gitlab.com/ codeberg.org/ bitbucket.org/}"
+        while IFS= read -r url_line; do
+            [ -z "$url_line" ] && continue
+            local url
+            url=$(echo "$url_line" | sed -E 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*//')
+            local match=0
+            old_ifs="$IFS"; IFS=' '
+            for prefix in $gm_allow; do
+                case "$url" in
+                    "https://${prefix}"*|"http://${prefix}"*|"git@${prefix%/}:"*|"ssh://git@${prefix%/}/"*) match=1; break ;;
+                esac
+            done
+            IFS="$old_ifs"
+            if [ "$match" -eq 0 ]; then
+                findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[SUBMODULE]${RESET} ${BOLD}.gitmodules${RESET}: submodule URL not in allowlist — verify: ${url}\n"
+                finding_count=$((finding_count + 1))
+            fi
+        done <<GMEOF
+$(grep -E '^\s*url\s*=' "$gm_file" 2>/dev/null)
+GMEOF
+    fi
+
+    # --- Dockerfile / docker-compose.yml scan ---
+    while IFS= read -r df; do
+        [ -f "$df" ] || continue
+        local relpath="${df#${repo_dir}/}"
+        if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' "$df" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[DOCKER_RCE]${RESET} ${BOLD}${relpath}${RESET}: curl|bash in Dockerfile/compose\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' "$df" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[DOCKER_RCE]${RESET} ${BOLD}${relpath}${RESET}: base64-decoded shell exec in Dockerfile/compose\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qF "$V1_MARKER" "$df" 2>/dev/null || grep -qF "$V2_MARKER" "$df" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[DOCKER_PAYLOAD]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature in Dockerfile/compose\n"
+            finding_count=$((finding_count + 1))
+        fi
+        old_ifs="$IFS"; IFS=' '
+        for c2 in $C2_DOMAINS; do
+            if grep -qF "$c2" "$df" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[DOCKER_C2]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in Dockerfile/compose (${c2})\n"
+                finding_count=$((finding_count + 1))
+            fi
+        done
+        IFS="$old_ifs"
+    done <<DFEOF
+$(find "$repo_dir" \( -iname "Dockerfile" -o -iname "Dockerfile.*" -o -iname "docker-compose*.yml" -o -iname "docker-compose*.yaml" -o -iname "compose.yml" -o -iname "compose.yaml" \) -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 5 2>/dev/null)
+DFEOF
+
+    # --- Makefile scan ---
+    while IFS= read -r mf; do
+        [ -f "$mf" ] || continue
+        local relpath="${mf#${repo_dir}/}"
+        if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' "$mf" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[MAKE_RCE]${RESET} ${BOLD}${relpath}${RESET}: curl|bash in Makefile target\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' "$mf" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[MAKE_RCE]${RESET} ${BOLD}${relpath}${RESET}: base64-decoded shell exec in Makefile\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qF "$V1_MARKER" "$mf" 2>/dev/null || grep -qF "$V2_MARKER" "$mf" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[MAKE_PAYLOAD]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature in Makefile\n"
+            finding_count=$((finding_count + 1))
+        fi
+        old_ifs="$IFS"; IFS=' '
+        for c2 in $C2_DOMAINS; do
+            if grep -qF "$c2" "$mf" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[MAKE_C2]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in Makefile (${c2})\n"
+                finding_count=$((finding_count + 1))
+            fi
+        done
+        IFS="$old_ifs"
+    done <<MFEOF
+$(find "$repo_dir" \( -name "Makefile" -o -name "makefile" -o -name "GNUmakefile" -o -name "*.mk" \) -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 5 2>/dev/null)
+MFEOF
+
+    # --- Monorepo / build-tool config scan (turbo / nx / lerna / rush / pnpm-workspace) ---
+    while IFS= read -r mc; do
+        [ -f "$mc" ] || continue
+        local relpath="${mc#${repo_dir}/}"
+        if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' "$mc" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[MONOREPO_RCE]${RESET} ${BOLD}${relpath}${RESET}: curl|bash in monorepo config\n"
+            finding_count=$((finding_count + 1))
+        fi
+        if grep -qF "$V1_MARKER" "$mc" 2>/dev/null || grep -qF "$V2_MARKER" "$mc" 2>/dev/null; then
+            findings="${findings}  ${RED}-${RESET} ${CYAN}[MONOREPO_PAYLOAD]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature in monorepo config\n"
+            finding_count=$((finding_count + 1))
+        fi
+        old_ifs="$IFS"; IFS=' '
+        for c2 in $C2_DOMAINS; do
+            if grep -qF "$c2" "$mc" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[MONOREPO_C2]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in monorepo config (${c2})\n"
+                finding_count=$((finding_count + 1))
+            fi
+        done
+        IFS="$old_ifs"
+    done <<MONOEOF
+$(find "$repo_dir" \( -name "turbo.json" -o -name "nx.json" -o -name "lerna.json" -o -name "rush.json" -o -name "pnpm-workspace.yaml" -o -name "workspace.json" \) -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 5 2>/dev/null)
+MONOEOF
+
     # --- git grep across all branches for signatures ---
     # For each signature, run git grep -lF against all branches.
     # Each hit already knows which signature matched — no second-pass needed.

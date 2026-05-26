@@ -1009,6 +1009,103 @@ REFSEOF
     fi
     rm -f "$gha_out"
 
+    # --- Pass 5f: build/CI artifact scan (Dockerfile / Makefile / monorepo / npm scripts / submodules) ---
+    # One combined sweep across all file types using a single git grep with multiple
+    # patterns, then per-file detail check. Pathspecs are mutually exclusive so the
+    # initial filter is cheap.
+    _ep "build artifacts..."
+    local build_out
+    build_out=$(mktemp)
+    # shellcheck disable=SC2086
+    git -c grep.threads=4 -C "$bare_dir" grep -lE \
+        -e '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' \
+        -e 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' \
+        $all_refs -- \
+        ':(glob)**/Dockerfile' ':(glob)**/Dockerfile.*' \
+        ':(glob)**/docker-compose*.yml' ':(glob)**/docker-compose*.yaml' \
+        ':(glob)**/compose.yml' ':(glob)**/compose.yaml' \
+        ':(glob)**/Makefile' ':(glob)**/makefile' ':(glob)**/GNUmakefile' ':(glob)**/*.mk' \
+        ':(glob)**/turbo.json' ':(glob)**/nx.json' ':(glob)**/lerna.json' ':(glob)**/rush.json' \
+        ':(glob)**/pnpm-workspace.yaml' ':(glob)**/workspace.json' \
+        ':(glob)**/package.json' \
+        > "$build_out" 2>/dev/null || true
+
+    if [ -s "$build_out" ]; then
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+
+            # Classify by filename
+            local cat="BUILD"
+            case "$filepath" in
+                *Dockerfile*|*compose.yml|*compose.yaml) cat="DOCKER" ;;
+                *Makefile|*makefile|*GNUmakefile|*.mk)   cat="MAKE" ;;
+                *turbo.json|*nx.json|*lerna.json|*rush.json|*pnpm-workspace.yaml|*workspace.json) cat="MONOREPO" ;;
+                *package.json) cat="NPM_SCRIPT" ;;
+            esac
+
+            local content
+            content="$(git -C "$bare_dir" show "${ref}:${filepath}" 2>/dev/null)" || continue
+
+            # package.json: only flag if it actually has a "scripts" object
+            if [ "$cat" = "NPM_SCRIPT" ]; then
+                grep -q '"scripts"' <<<"$content" || continue
+            fi
+
+            if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[%s_RCE] curl|bash auto-execution\n' "$branch" "$filepath" "$cat" >> "$results_file"
+            fi
+            if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[%s_RCE] base64-decoded shell execution\n' "$branch" "$filepath" "$cat" >> "$results_file"
+            fi
+            if grep -qF "$V1_MARKER" <<<"$content" || grep -qF "$V2_MARKER" <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[%s_PAYLOAD] PolinRider obfuscator signature\n' "$branch" "$filepath" "$cat" >> "$results_file"
+            fi
+        done < "$build_out"
+    fi
+    rm -f "$build_out"
+
+    # --- Pass 5g: .gitmodules URL allowlist ---
+    # Flag submodules pointing outside the trusted-host allowlist.
+    local gm_out
+    gm_out=$(mktemp)
+    # shellcheck disable=SC2086
+    git -C "$bare_dir" grep -lE '^\s*url\s*=' $all_refs -- ':(glob)**/.gitmodules' > "$gm_out" 2>/dev/null || true
+    if [ -s "$gm_out" ]; then
+        local gm_allow="${GITMODULES_ALLOW:-github.com/ gitlab.com/ codeberg.org/ bitbucket.org/}"
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            local content
+            content="$(git -C "$bare_dir" show "${ref}:${filepath}" 2>/dev/null)" || continue
+            while IFS= read -r url_line; do
+                [ -z "$url_line" ] && continue
+                local url
+                url=$(echo "$url_line" | sed -E 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*//')
+                local match=0
+                old_ifs="$IFS"; IFS=' '
+                for prefix in $gm_allow; do
+                    case "$url" in
+                        "https://${prefix}"*|"http://${prefix}"*|"git@${prefix%/}:"*|"ssh://git@${prefix%/}/"*) match=1; break ;;
+                    esac
+                done
+                IFS="$old_ifs"
+                if [ "$match" -eq 0 ]; then
+                    printf 'FINDING\t%s\t%s\t[SUBMODULE] submodule URL outside allowlist: %s\n' "$branch" "$filepath" "$url" >> "$results_file"
+                fi
+            done <<< "$(grep -E '^\s*url\s*=' <<<"$content")"
+        done < "$gm_out"
+    fi
+    rm -f "$gm_out"
+
     # --- Passes 6-10: IDE config checks (run in parallel) ---
     _ep "IDE configs..."
     local ide_results_8 ide_results_9 ide_results_10 ide_results_11 ide_results_12

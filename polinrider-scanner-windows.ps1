@@ -591,6 +591,83 @@ function Scan-Repo ([string]$RepoDir) {
         }
     }
 
+    # --- npm scripts.* content scan ---
+    Get-ChildItem $RepoDir -Recurse -Filter 'package.json' -File -Depth 4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if (-not $content.Contains('"scripts"')) { return }
+            if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel 'curl|bash in npm scripts (auto-run on install/build)' 'HIGH'; $findingCount++
+            }
+            if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel 'base64-decoded shell exec in npm scripts' 'HIGH'; $findingCount++
+            }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                Add-RepoFinding $rel 'PolinRider obfuscator signature in package.json' 'HIGH'; $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "C2 domain in package.json ($c2)" 'HIGH'; $findingCount++
+                }
+            }
+        }
+
+    # --- .gitmodules URL allowlist ---
+    $gmFile = Join-Path $RepoDir '.gitmodules'
+    if (Test-Path $gmFile) {
+        $gmAllow = @('github.com/','gitlab.com/','codeberg.org/','bitbucket.org/')
+        $gmContent = Get-FileContent $gmFile
+        if ($gmContent) {
+            [regex]::Matches($gmContent, '(?m)^\s*url\s*=\s*(.+?)\s*$') | ForEach-Object {
+                $url = $_.Groups[1].Value.Trim()
+                $matched = $false
+                foreach ($prefix in $gmAllow) {
+                    $prefixNoSlash = $prefix.TrimEnd('/')
+                    if ($url -like "https://$prefix*" -or $url -like "http://$prefix*" -or $url -like "git@${prefixNoSlash}:*" -or $url -like "ssh://git@${prefixNoSlash}/*") {
+                        $matched = $true; break
+                    }
+                }
+                if (-not $matched) {
+                    Add-RepoFinding '.gitmodules' "submodule URL outside allowlist: $url" 'MEDIUM'; $findingCount++
+                }
+            }
+        }
+    }
+
+    # --- Dockerfile / docker-compose / Makefile / monorepo config scans ---
+    $buildTargets = @(
+        @{ Include = @('Dockerfile','Dockerfile.*','docker-compose*.yml','docker-compose*.yaml','compose.yml','compose.yaml'); Cat = 'DOCKER' },
+        @{ Include = @('Makefile','makefile','GNUmakefile','*.mk'); Cat = 'MAKE' },
+        @{ Include = @('turbo.json','nx.json','lerna.json','rush.json','pnpm-workspace.yaml','workspace.json'); Cat = 'MONOREPO' }
+    )
+    foreach ($t in $buildTargets) {
+        Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue -Include $t.Include |
+            Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+            ForEach-Object {
+                $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+                $content = Get-FileContent $_.FullName
+                if (-not $content) { return }
+                $cat = $t.Cat
+                if ($content -match '(curl|wget)[^|]*\|\s*(bash|sh)') {
+                    Add-RepoFinding $rel "${cat}_RCE: curl|bash auto-execution" 'HIGH'; $findingCount++
+                }
+                if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+                    Add-RepoFinding $rel "${cat}_RCE: base64-decoded shell execution" 'HIGH'; $findingCount++
+                }
+                if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+                    Add-RepoFinding $rel "${cat}_PAYLOAD: PolinRider obfuscator signature" 'HIGH'; $findingCount++
+                }
+                foreach ($c2 in $C2_DOMAINS) {
+                    if ($content.Contains($c2)) {
+                        Add-RepoFinding $rel "${cat}_C2: C2 domain ($c2)" 'HIGH'; $findingCount++
+                    }
+                }
+            }
+    }
+
     # --- Git hooks scan (working-tree .git/hooks) ---
     $hooksDir = Join-Path $RepoDir '.git\hooks'
     if (Test-Path $hooksDir) {
