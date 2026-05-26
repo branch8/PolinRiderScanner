@@ -1076,6 +1076,29 @@ $(find "${repo_dir}/.git/hooks" -maxdepth 1 -type f 2>/dev/null)
 HOOKEOF
     fi
 
+    # --- Suspicious font-folder fingerprints (heuristic, regardless of content) ---
+    # Legitimate FontAwesome does NOT ship a "solid 400" weight (only solid 900),
+    # so any `fa-solid-400.woff2` or `fa-solid-400.{eot,svg,ttf,woff}` file is
+    # a strong signal of the attacker's planted folder — even if the V1 marker
+    # has been rotated. Also flag any README in a fonts directory (legitimate
+    # fonts folders don't have READMEs).
+    while IFS= read -r susp_path; do
+        [ -z "$susp_path" ] && continue
+        local relpath="${susp_path#${repo_dir}/}"
+        case "$relpath" in
+            */fa-solid-400.*)
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[FONTS_SUSPICIOUS]${RESET} ${BOLD}${relpath}${RESET}: fa-solid-400 has no legitimate FontAwesome variant (solid only ships weight 900) — likely planted file\n"
+                finding_count=$((finding_count + 1))
+                ;;
+            */fonts/README.md|*/fonts/readme.md|*/fonts/Readme.md|*/fonts/README.txt)
+                findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[FONTS_SUSPICIOUS]${RESET} ${BOLD}${relpath}${RESET}: README inside fonts/ — legitimate font packages don't ship READMEs in the asset folder\n"
+                finding_count=$((finding_count + 1))
+                ;;
+        esac
+    done <<FONTEOF
+$(find "$repo_dir" \( -name "fa-solid-400.*" -o -path "*/fonts/README*" -o -path "*/fonts/readme*" -o -path "*/fonts/Readme*" \) -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -maxdepth 8 2>/dev/null)
+FONTEOF
+
     # --- npm scripts.* content scan (preinstall / postinstall / etc.) ---
     # Look for shell injection / V1/V2 markers / C2 inside the "scripts" block.
     # We grep package.json for the patterns; matches in url/description/etc.

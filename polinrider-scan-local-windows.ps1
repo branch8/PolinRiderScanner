@@ -747,6 +747,26 @@ function Scan-Repo ([string]$RepoDir) {
             }
         }
 
+    # --- Suspicious font-folder fingerprints (filename heuristic) ---
+    # fa-solid-400.* — no legitimate FontAwesome variant; fonts/README.* — legitimate
+    # font packages don't ship READMEs in the asset folder.
+    Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'fa-solid-400.woff2','fa-solid-400.woff','fa-solid-400.ttf','fa-solid-400.eot','fa-solid-400.svg' |
+        Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            Add-RepoFinding $rel '[FONTS_SUSPICIOUS] fa-solid-400 has no legitimate FontAwesome variant — likely planted file' 'HIGH'
+            $findingCount++
+        }
+    Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'README.md','readme.md','Readme.md','README.txt' |
+        Where-Object { $_.FullName -match '[\\/]fonts[\\/]' -and $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' } |
+        ForEach-Object {
+            $rel = $_.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+            Add-RepoFinding $rel '[FONTS_SUSPICIOUS] README inside fonts/ — legitimate font packages do not ship READMEs in asset folder' 'MEDIUM'
+            $findingCount++
+        }
+
     # --- .vscode/ folder presence (policy + TasksJacker delivery surface) ---
     $vscodeDir = Join-Path $RepoDir '.vscode'
     if (Test-Path $vscodeDir) {

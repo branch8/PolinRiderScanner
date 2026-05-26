@@ -1053,6 +1053,37 @@ SIGSEOF
     fi
     rm -f "$vscode_out"
 
+    # --- Pass 7i: Suspicious font-folder fingerprints (file-name level) ---
+    local font_out
+    font_out=$(mktemp)
+    # shellcheck disable=SC2086
+    git -C "$bare_dir" grep -l "" $all_refs -- \
+        ':(glob)**/fa-solid-400.woff2' ':(glob)**/fa-solid-400.woff' \
+        ':(glob)**/fa-solid-400.ttf' ':(glob)**/fa-solid-400.eot' \
+        ':(glob)**/fa-solid-400.svg' \
+        ':(glob)**/fonts/README.md' ':(glob)**/fonts/readme.md' \
+        ':(glob)**/fonts/Readme.md' ':(glob)**/fonts/README.txt' \
+        > "$font_out" 2>/dev/null || true
+    if [ -s "$font_out" ]; then
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            case "$filepath" in
+                */fa-solid-400.*)
+                    printf 'FINDING\t%s\t%s\t[FONTS_SUSPICIOUS] fa-solid-400 has no legitimate FontAwesome variant — likely planted file\n' "$branch" "$filepath" >> "$results_file"
+                    ;;
+                */fonts/README*|*/fonts/readme*|*/fonts/Readme*)
+                    printf 'FINDING\t%s\t%s\t[FONTS_SUSPICIOUS] README inside fonts/ — legitimate font packages do not ship READMEs in asset folder\n' "$branch" "$filepath" >> "$results_file"
+                    ;;
+            esac
+        done < "$font_out"
+    fi
+    rm -f "$font_out"
+
     # --- Pass 8: IDE config compound checks (curl|bash + folderOpen) ---
     _ep "IDE configs..."
     local curl_out
