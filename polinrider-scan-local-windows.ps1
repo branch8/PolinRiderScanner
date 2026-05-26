@@ -100,7 +100,19 @@ $MALICIOUS_NPM_PKGS = @(
     'tailwindcss-style-animate','tailwind-mainanimation','tailwind-autoanimation',
     'tailwind-animationbased','tailwindcss-typography-style',
     'tailwindcss-style-modify','tailwindcss-animate-style',
-    '@common-stack/generate-plugin','plain-crypto-js'
+    '@common-stack/generate-plugin','plain-crypto-js',
+    # graphalgo cluster — Lazarus fake-recruitment, 2025-05+
+    'graphalgo','graphorithm','graphstruct','graphlibcore','netstruct',
+    'graphnetworkx','terminalcolor256','graphkitx','graphchain','graphflux',
+    'graphorbit','graphnet','graphhub','terminal-kleur','graphrix',
+    'bignumx','bignumberx','bignumex','bigmathex','bigmathlib','bigmathutils',
+    'graphlink','bigmathix','graphflowx'
+)
+
+# Known malicious PyPI packages (graphalgo cluster — Lazarus, 2025-05+)
+$MALICIOUS_PYPI_PKGS = @(
+    'graphalgo','graphex','graphlibx','graphdict','graphflux','graphnode','graphsync',
+    'bigpyx','bignum','bigmathex','bigmathix','bigmathutils'
 )
 
 # Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
@@ -561,6 +573,88 @@ function Scan-Repo ([string]$RepoDir) {
                 }
             }
         }
+
+    # --- Malicious PyPI packages (graphalgo cluster) in Python manifests ---
+    $pyManifests = @(Get-ChildItem $RepoDir -Recurse -File -ErrorAction SilentlyContinue `
+        -Include 'requirements*.txt','pyproject.toml','Pipfile','Pipfile.lock','poetry.lock','setup.py','setup.cfg' `
+        | Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' -and $_.FullName -notlike '*\venv*' -and $_.FullName -notlike '*\.venv*' })
+    foreach ($pyFile in $pyManifests) {
+        $rel = $pyFile.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+        $content = Get-FileContent $pyFile.FullName
+        if (-not $content) { continue }
+        foreach ($mal in $MALICIOUS_PYPI_PKGS) {
+            $malEsc = [regex]::Escape($mal)
+            if ($content -match "(?m)^$malEsc([=<>!~ ]|$)" -or $content -match "[`"']${malEsc}[`"']") {
+                Add-RepoFinding $rel "[SUPPLY CHAIN] Malicious PyPI package: $mal (Lazarus graphalgo cluster)" 'HIGH'
+                $findingCount++
+            }
+        }
+    }
+
+    # --- GitHub Actions workflow analysis ---
+    $workflowDir1 = Join-Path $RepoDir '.github\workflows'
+    $workflowDir2 = Join-Path $RepoDir '.github\actions'
+    $workflowFiles = @()
+    foreach ($wfDir in @($workflowDir1, $workflowDir2)) {
+        if (Test-Path $wfDir) {
+            $workflowFiles += @(Get-ChildItem $wfDir -Recurse -Include '*.yml','*.yaml' -File -ErrorAction SilentlyContinue)
+        }
+    }
+    foreach ($wf in $workflowFiles) {
+        $rel = $wf.FullName.Replace("$RepoDir\", '').Replace("$RepoDir/", '')
+        $content = Get-FileContent $wf.FullName
+        if (-not $content) { continue }
+        if ($content -match '(curl|wget)[^\s]*\|\s*(bash|sh)') {
+            Add-RepoFinding $rel '[GHA_RCE] Workflow contains curl|bash auto-execution' 'HIGH'
+            $findingCount++
+        }
+        if ($content -match 'base64[^|]*-d[^|]*\|\s*(bash|sh)') {
+            Add-RepoFinding $rel '[GHA_RCE] Workflow contains base64-decoded shell execution' 'HIGH'
+            $findingCount++
+        }
+        if (($content -match 'secrets\.[A-Z_]+') -and ($content -match '(curl|wget)[^\s]*-X?\s*(POST|PUT)')) {
+            Add-RepoFinding $rel '[GHA_EXFIL] Workflow combines secrets with outbound POST — verify intent' 'MEDIUM'
+            $findingCount++
+        }
+        if ($content -match '(?m)^\s*uses:\s*[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+@(main|master|develop)\b') {
+            Add-RepoFinding $rel '[GHA_REF] Workflow pins third-party action to mutable branch — verify' 'MEDIUM'
+            $findingCount++
+        }
+        if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER)) {
+            Add-RepoFinding $rel '[GHA_PAYLOAD] PolinRider obfuscator signature inside workflow' 'HIGH'
+            $findingCount++
+        }
+        foreach ($c2 in $C2_DOMAINS) {
+            if ($content.Contains($c2)) {
+                Add-RepoFinding $rel "[GHA_C2] C2 domain in workflow ($c2)" 'HIGH'
+                $findingCount++
+            }
+        }
+    }
+
+    # --- Git hooks scan (working-tree .git/hooks, NOT branch contents) ---
+    $hooksDir = Join-Path $RepoDir '.git\hooks'
+    if (Test-Path $hooksDir) {
+        Get-ChildItem $hooksDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.sample' } | ForEach-Object {
+            $rel = ".git/hooks/$($_.Name)"
+            $content = Get-FileContent $_.FullName
+            if (-not $content) { return }
+            if ($content.Contains($V1_MARKER) -or $content.Contains($V2_MARKER) -or $content.Contains($V1_DECODER)) {
+                Add-RepoFinding $rel '[GIT_HOOK] PolinRider obfuscator signature in git hook' 'HIGH'
+                $findingCount++
+            }
+            if ($content -match '(curl|wget)[^\s]*\|\s*(bash|sh)') {
+                Add-RepoFinding $rel '[GIT_HOOK] curl|bash auto-execution in git hook' 'HIGH'
+                $findingCount++
+            }
+            foreach ($c2 in $C2_DOMAINS) {
+                if ($content.Contains($c2)) {
+                    Add-RepoFinding $rel "[GIT_HOOK] C2 domain in git hook ($c2)" 'HIGH'
+                    $findingCount++
+                }
+            }
+        }
+    }
 
     # --- ShoeVista template detection ---
     $clientPkg = Join-Path $RepoDir 'client\package.json'

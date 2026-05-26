@@ -91,7 +91,10 @@ COMMON_GLOBAL_M="global['m'] = module"
 # (tailwind-* originals + @common-stack/generate-plugin per Sonatype 2026-04;
 #  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31)
 # ---------------------------------------------------------------------------
-MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js"
+MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js graphalgo graphorithm graphstruct graphlibcore netstruct graphnetworkx terminalcolor256 graphkitx graphchain graphflux graphorbit graphnet graphhub terminal-kleur graphrix bignumx bignumberx bignumex bigmathex bigmathlib bigmathutils graphlink bigmathix graphflowx"
+
+# Known malicious PyPI packages (graphalgo cluster — Lazarus fake-recruitment, 2025-05+)
+MALICIOUS_PYPI_PKGS="graphalgo graphex graphlibx graphdict graphflux graphnode graphsync bigpyx bignum bigmathex bigmathix bigmathutils"
 
 # Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
 AXIOS_BAD_VERSIONS="1.14.1 0.30.4"
@@ -752,16 +755,17 @@ REFSEOF
     done
     IFS="$old_ifs"
 
+    # Build -e args dynamically from $MALICIOUS_NPM_PKGS so adding packages
+    # to the constant list automatically extends the grep filter.
+    local _npm_grep_args=""
+    old_ifs="$IFS"
+    IFS=' '
+    for mal_pkg in $MALICIOUS_NPM_PKGS; do
+        _npm_grep_args="${_npm_grep_args} -e \"\\\"${mal_pkg}\\\"\""
+    done
+    IFS="$old_ifs"
     # shellcheck disable=SC2086
-    git -c grep.threads=4 -C "$bare_dir" grep -lF \
-        -e "\"tailwindcss-style-animate\"" \
-        -e "\"tailwind-mainanimation\"" \
-        -e "\"tailwind-autoanimation\"" \
-        -e "\"tailwind-animationbased\"" \
-        -e "\"tailwindcss-typography-style\"" \
-        -e "\"tailwindcss-style-modify\"" \
-        -e "\"tailwindcss-animate-style\"" \
-        $all_refs -- ':(glob)**/package.json' > "$pkg_out" 2>/dev/null || true
+    eval "git -c grep.threads=4 -C \"\$bare_dir\" grep -lF $_npm_grep_args \$all_refs -- ':(glob)**/package.json'" > "$pkg_out" 2>/dev/null || true
 
     if [ -s "$pkg_out" ]; then
         while IFS= read -r hit_line; do
@@ -919,6 +923,91 @@ REFSEOF
         done < "$fonts_readme_out"
     fi
     rm -f "$fonts_readme_out"
+
+    # --- Pass 5d: Malicious PyPI packages (graphalgo cluster — Lazarus 2025-05+) ---
+    _ep "PyPI packages..."
+    local pypi_out
+    pypi_out=$(mktemp)
+    local _pypi_grep_args=""
+    old_ifs="$IFS"
+    IFS=' '
+    for mal_pypi in $MALICIOUS_PYPI_PKGS; do
+        _pypi_grep_args="${_pypi_grep_args} -e \"${mal_pypi}\""
+    done
+    IFS="$old_ifs"
+    # shellcheck disable=SC2086
+    eval "git -c grep.threads=4 -C \"\$bare_dir\" grep -lF $_pypi_grep_args \$all_refs -- \
+        ':(glob)**/requirements*.txt' ':(glob)**/pyproject.toml' ':(glob)**/Pipfile' \
+        ':(glob)**/Pipfile.lock' ':(glob)**/poetry.lock' ':(glob)**/setup.py' ':(glob)**/setup.cfg'" \
+        > "$pypi_out" 2>/dev/null || true
+
+    if [ -s "$pypi_out" ]; then
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            local content
+            content="$(git -C "$bare_dir" show "${ref}:${filepath}" 2>/dev/null)" || continue
+            old_ifs="$IFS"
+            IFS=' '
+            for mal_pypi in $MALICIOUS_PYPI_PKGS; do
+                if grep -qE "^${mal_pypi}([=<>!~ ]|$)" <<<"$content" \
+                   || grep -qE "[\"']${mal_pypi}[\"']" <<<"$content"; then
+                    printf 'FINDING\t%s\t%s\t[SUPPLY CHAIN] Malicious PyPI package: %s (Lazarus graphalgo cluster)\n' "$branch" "$filepath" "$mal_pypi" >> "$results_file"
+                fi
+            done
+            IFS="$old_ifs"
+        done < "$pypi_out"
+    fi
+    rm -f "$pypi_out"
+
+    # --- Pass 5e: GitHub Actions workflow analysis ---
+    # Look for curl|bash auto-execution, base64-decoded shell, secrets exfil,
+    # mutable-branch action pins, V1/V2 markers, and C2 domains in workflow files.
+    local gha_out
+    gha_out=$(mktemp)
+    # First filter: find any workflow file with one of the suspicious patterns
+    # shellcheck disable=SC2086
+    git -c grep.threads=4 -C "$bare_dir" grep -lE \
+        -e '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' \
+        -e 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' \
+        -e '^\s*uses:\s*[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+@(main|master|develop)\b' \
+        $all_refs -- ':(glob)**/.github/workflows/*.yml' ':(glob)**/.github/workflows/*.yaml' \
+        ':(glob)**/.github/actions/**/*.yml' ':(glob)**/.github/actions/**/*.yaml' \
+        > "$gha_out" 2>/dev/null || true
+
+    if [ -s "$gha_out" ]; then
+        while IFS= read -r hit_line; do
+            if [ -z "$hit_line" ]; then continue; fi
+            local ref="${hit_line%%:*}"
+            local filepath="${hit_line#*:}"
+            if [ "$ref" = "$hit_line" ] || [ -z "$filepath" ]; then continue; fi
+            local branch="${ref#refs/heads/}"
+            case "$branch" in origin/*|*/HEAD) continue ;; esac
+            local content
+            content="$(git -C "$bare_dir" show "${ref}:${filepath}" 2>/dev/null)" || continue
+            if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[GHA_RCE] Workflow contains curl|bash auto-execution\n' "$branch" "$filepath" >> "$results_file"
+            fi
+            if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[GHA_RCE] Workflow contains base64-decoded shell execution\n' "$branch" "$filepath" >> "$results_file"
+            fi
+            if grep -qE 'secrets\.[A-Z_]+' <<<"$content" \
+               && grep -qE '(curl|wget)[^|]*-X?[[:space:]]*(POST|PUT)' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[GHA_EXFIL] Workflow combines secrets with outbound POST — verify intent\n' "$branch" "$filepath" >> "$results_file"
+            fi
+            if grep -qE '^\s*uses:\s*[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+@(main|master|develop)\b' <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[GHA_REF] Workflow pins third-party action to mutable branch\n' "$branch" "$filepath" >> "$results_file"
+            fi
+            if grep -qF "$V1_MARKER" <<<"$content" || grep -qF "$V2_MARKER" <<<"$content"; then
+                printf 'FINDING\t%s\t%s\t[GHA_PAYLOAD] PolinRider obfuscator signature inside workflow\n' "$branch" "$filepath" >> "$results_file"
+            fi
+        done < "$gha_out"
+    fi
+    rm -f "$gha_out"
 
     # --- Passes 6-10: IDE config checks (run in parallel) ---
     _ep "IDE configs..."

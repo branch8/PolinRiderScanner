@@ -81,9 +81,13 @@ CONFIG_FILES="postcss.config.mjs postcss.config.js postcss.config.cjs tailwind.c
 # ---------------------------------------------------------------------------
 # Known malicious npm packages
 # (tailwind-* originals + @common-stack/generate-plugin per Sonatype 2026-04;
-#  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31)
+#  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31;
+#  graphalgo cluster (Lazarus fake-recruitment campaign since 2025-05))
 # ---------------------------------------------------------------------------
-MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js"
+MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js graphalgo graphorithm graphstruct graphlibcore netstruct graphnetworkx terminalcolor256 graphkitx graphchain graphflux graphorbit graphnet graphhub terminal-kleur graphrix bignumx bignumberx bignumex bigmathex bigmathlib bigmathutils graphlink bigmathix graphflowx"
+
+# Known malicious PyPI packages (graphalgo cluster — Lazarus fake-recruitment, 2025-05+)
+MALICIOUS_PYPI_PKGS="graphalgo graphex graphlibx graphdict graphflux graphnode graphsync bigpyx bignum bigmathex bigmathix bigmathutils"
 
 # Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
 AXIOS_BAD_VERSIONS="1.14.1 0.30.4"
@@ -951,6 +955,105 @@ $(find "$repo_dir" -path "*/node_modules/${mal_pkg}/package.json" -not -path "*/
 NMEOF
     done
     IFS="$old_ifs"
+
+    # --- Malicious PyPI packages (graphalgo cluster) in Python manifests ---
+    while IFS= read -r py_manifest; do
+        if [ -f "$py_manifest" ]; then
+            local relpath="${py_manifest#${repo_dir}/}"
+            old_ifs="$IFS"
+            IFS=' '
+            for mal_pypi in $MALICIOUS_PYPI_PKGS; do
+                # Match plain name in requirements.txt or quoted in pyproject/Pipfile/setup.py
+                if grep -qE "^${mal_pypi}([=<>!~ ]|$)" "$py_manifest" 2>/dev/null \
+                   || grep -qE "[\"']${mal_pypi}[\"']" "$py_manifest" 2>/dev/null; then
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[PYPI_PKG]${RESET} ${BOLD}${relpath}${RESET}: Malicious PyPI dependency '${mal_pypi}' (Lazarus graphalgo cluster)\n"
+                    finding_count=$((finding_count + 1))
+                fi
+            done
+            IFS="$old_ifs"
+        fi
+    done <<PYEOF
+$(find "$repo_dir" \( -name "requirements*.txt" -o -name "pyproject.toml" -o -name "Pipfile" -o -name "Pipfile.lock" -o -name "poetry.lock" -o -name "setup.py" -o -name "setup.cfg" \) -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/venv/*" -not -path "*/.venv/*" -maxdepth 5 2>/dev/null)
+PYEOF
+
+    # --- GitHub Actions workflow scan ---
+    # Look for shell injection (curl|bash), secrets exfil patterns, suspicious 3rd-party actions
+    while IFS= read -r wf_file; do
+        if [ -f "$wf_file" ]; then
+            local relpath="${wf_file#${repo_dir}/}"
+            if grep -qE '(curl|wget)[^|]*\|[[:space:]]*(bash|sh)' "$wf_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[GHA_RCE]${RESET} ${BOLD}${relpath}${RESET}: workflow contains curl|bash auto-execution\n"
+                finding_count=$((finding_count + 1))
+            fi
+            if grep -qE 'base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' "$wf_file" 2>/dev/null \
+               || grep -qE 'echo[^|]*\|[[:space:]]*base64[^|]*-d[^|]*\|[[:space:]]*(bash|sh)' "$wf_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[GHA_RCE]${RESET} ${BOLD}${relpath}${RESET}: workflow contains base64-decoded shell execution\n"
+                finding_count=$((finding_count + 1))
+            fi
+            # Secrets being piped to curl POST — clear exfil signature
+            if grep -qE 'secrets\.[A-Z_]+' "$wf_file" 2>/dev/null \
+               && grep -qE '(curl|wget)[^\n]*-X?\s*(POST|PUT)' "$wf_file" 2>/dev/null; then
+                findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[GHA_EXFIL]${RESET} ${BOLD}${relpath}${RESET}: workflow combines secrets + outbound POST — verify intent\n"
+                finding_count=$((finding_count + 1))
+            fi
+            # Untrusted third-party actions: uses: someone/repo@sha but not actions/, github/, or @v1/v2 style refs
+            # Just flag any non-official action uses with @branch (mutable ref) as suspicious
+            if grep -qE '^\s*uses:\s*[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+@(main|master|develop)\b' "$wf_file" 2>/dev/null; then
+                findings="${findings}  ${YELLOW}-${RESET} ${CYAN}[GHA_REF]${RESET} ${BOLD}${relpath}${RESET}: workflow uses third-party action pinned to mutable branch — verify\n"
+                finding_count=$((finding_count + 1))
+            fi
+            # V1/V2 markers / C2 in workflow files
+            if grep -qF "$V1_MARKER" "$wf_file" 2>/dev/null || grep -qF "$V2_MARKER" "$wf_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[GHA_PAYLOAD]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature inside workflow\n"
+                finding_count=$((finding_count + 1))
+            fi
+            old_ifs="$IFS"
+            IFS=' '
+            for c2 in $C2_DOMAINS; do
+                if grep -qF "$c2" "$wf_file" 2>/dev/null; then
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[GHA_C2]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in workflow (${c2})\n"
+                    finding_count=$((finding_count + 1))
+                fi
+            done
+            IFS="$old_ifs"
+        fi
+    done <<WFEOF
+$(find "${repo_dir}/.github/workflows" "${repo_dir}/.github/actions" \( -name "*.yml" -o -name "*.yaml" \) -type f 2>/dev/null)
+WFEOF
+
+    # --- Git hooks scan (working-tree's .git/hooks, NOT contents-of-branches) ---
+    # Bare clones don't have a working tree; this scan only applies to real checkouts.
+    if [ -d "${repo_dir}/.git/hooks" ]; then
+        while IFS= read -r hook_file; do
+            [ -z "$hook_file" ] && continue
+            [ -f "$hook_file" ] || continue
+            local hook_name
+            hook_name="$(basename "$hook_file")"
+            case "$hook_name" in *.sample) continue ;; esac
+            local relpath=".git/hooks/${hook_name}"
+            if grep -qF "$V1_MARKER" "$hook_file" 2>/dev/null \
+               || grep -qF "$V2_MARKER" "$hook_file" 2>/dev/null \
+               || grep -qF "$V1_DECODER" "$hook_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[GIT_HOOK]${RESET} ${BOLD}${relpath}${RESET}: PolinRider obfuscator signature in git hook\n"
+                finding_count=$((finding_count + 1))
+            fi
+            if grep -qE '(curl|wget)[^\n]*\|\s*(bash|sh)' "$hook_file" 2>/dev/null; then
+                findings="${findings}  ${RED}-${RESET} ${CYAN}[GIT_HOOK]${RESET} ${BOLD}${relpath}${RESET}: curl|bash auto-execution in git hook\n"
+                finding_count=$((finding_count + 1))
+            fi
+            old_ifs="$IFS"
+            IFS=' '
+            for c2 in $C2_DOMAINS; do
+                if grep -qF "$c2" "$hook_file" 2>/dev/null; then
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[GIT_HOOK]${RESET} ${BOLD}${relpath}${RESET}: C2 domain in git hook (${c2})\n"
+                    finding_count=$((finding_count + 1))
+                fi
+            done
+            IFS="$old_ifs"
+        done <<HOOKEOF
+$(find "${repo_dir}/.git/hooks" -maxdepth 1 -type f 2>/dev/null)
+HOOKEOF
+    fi
 
     # --- git grep across all branches for signatures ---
     # For each signature, run git grep -lF against all branches.
