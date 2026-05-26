@@ -88,13 +88,24 @@ COMMON_GLOBAL_M="global['m'] = module"
 
 # ---------------------------------------------------------------------------
 # Known malicious npm packages
+# (tailwind-* originals + @common-stack/generate-plugin per Sonatype 2026-04;
+#  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31)
 # ---------------------------------------------------------------------------
-MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style"
+MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js"
+
+# Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
+AXIOS_BAD_VERSIONS="1.14.1 0.30.4"
 
 # ---------------------------------------------------------------------------
 # C2 infrastructure domains
+# (includes Vercel-hosted TasksJacker endpoints + axios-attack BlueNoroff C2)
 # ---------------------------------------------------------------------------
-C2_DOMAINS="260120.vercel.app default-configuration.vercel.app vscode-settings-bootstrap.vercel.app vscode-settings-config.vercel.app vscode-bootstrapper.vercel.app vscode-load-config.vercel.app"
+C2_DOMAINS="260120.vercel.app default-configuration.vercel.app vscode-settings-bootstrap.vercel.app vscode-settings-config.vercel.app vscode-bootstrapper.vercel.app vscode-load-config.vercel.app sfrclak.com callnrwise.com"
+
+# Axios-attack campaign markers (BlueNoroff/Lazarus)
+AXIOS_C2_IP="142.11.206.73"
+AXIOS_XOR_KEY="OrDeR_7077"
+AXIOS_CAMPAIGN_ID="6202033"
 
 # Blockchain C2 endpoints
 BLOCKCHAIN_HOSTS="api.trongrid.io fullnode.mainnet.aptoslabs.com bsc-dataseed.binance.org bsc-rpc.publicnode.com"

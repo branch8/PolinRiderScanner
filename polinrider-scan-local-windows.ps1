@@ -93,12 +93,21 @@ $CONFIG_FILES = @(
 
 # -------------------------------------------------------------------------
 # Known malicious npm packages
+# (tailwind-* originals + @common-stack/generate-plugin per Sonatype 2026-04;
+#  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31)
 # -------------------------------------------------------------------------
 $MALICIOUS_NPM_PKGS = @(
     'tailwindcss-style-animate','tailwind-mainanimation','tailwind-autoanimation',
     'tailwind-animationbased','tailwindcss-typography-style',
-    'tailwindcss-style-modify','tailwindcss-animate-style'
+    'tailwindcss-style-modify','tailwindcss-animate-style',
+    '@common-stack/generate-plugin','plain-crypto-js'
 )
+
+# Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
+$AXIOS_BAD_VERSIONS = @('1.14.1','0.30.4')
+$AXIOS_C2_IP        = '142.11.206.73'
+$AXIOS_XOR_KEY      = 'OrDeR_7077'
+$AXIOS_CAMPAIGN_ID  = '6202033'
 
 # Legitimate tailwind packages (allowlist)
 $TAILWIND_ALLOWLIST = @(
@@ -119,7 +128,9 @@ $C2_DOMAINS = @(
     '260120.vercel.app','default-configuration.vercel.app',
     'vscode-settings-bootstrap.vercel.app','vscode-settings-config.vercel.app',
     'vscode-bootstrapper.vercel.app','vscode-load-config.vercel.app',
-    'onrender.com'
+    'onrender.com',
+    # Axios-attack BlueNoroff C2 (2026-03-31)
+    'sfrclak.com','callnrwise.com'
 )
 $BLOCKCHAIN_HOSTS = @(
     'api.trongrid.io','fullnode.mainnet.aptoslabs.com',
@@ -527,6 +538,15 @@ function Scan-Repo ([string]$RepoDir) {
             foreach ($pkg in $MALICIOUS_NPM_PKGS) {
                 if ($content.Contains("`"$pkg`"")) {
                     Add-RepoFinding $rel "Malicious npm dependency '$pkg'" 'HIGH'
+                    $findingCount++
+                }
+            }
+
+            # Axios maintainer-hijack: flag only the compromised versions (1.14.1, 0.30.4)
+            foreach ($axVer in $AXIOS_BAD_VERSIONS) {
+                $axEsc = [regex]::Escape($axVer)
+                if ($content -match "`"axios`"\s*:\s*`"[~^]?$axEsc`"") {
+                    Add-RepoFinding $rel "Compromised axios@$axVer (BlueNoroff hijack 2026-03-31)" 'HIGH'
                     $findingCount++
                 }
             }
@@ -1178,6 +1198,10 @@ function Scan-TempDirs {
                     Add-SystemFinding 'TEMP' "XOR decryption key in temp file: $($_.FullName)"
                 }
 
+                if ($content.Contains($AXIOS_XOR_KEY) -or $content.Contains($AXIOS_CAMPAIGN_ID) -or $content.Contains($AXIOS_C2_IP)) {
+                    Add-SystemFinding 'TEMP' "Axios-attack signature in temp file: $($_.FullName)"
+                }
+
                 foreach ($domain in $C2_DOMAINS) {
                     if ($content.Contains($domain)) {
                         Add-SystemFinding 'TEMP' "[C2] C2 domain in temp file: $($_.FullName) ($domain)"
@@ -1190,6 +1214,33 @@ function Scan-TempDirs {
             Add-SystemFinding 'TEMP' "[PROPAGATION] Auto-push script in temp directory: $propagation"
         }
     }
+
+    # Axios-attack RAT persistence artifacts (BlueNoroff/Lazarus, 2026-03-31)
+    $axiosArtifacts = @(
+        @{ Path = 'C:\ProgramData\system.bat';   Label = 'Axios-attack Windows persistence (Stage 1)' },
+        @{ Path = 'C:\ProgramData\wt.exe';       Label = 'Axios-attack Windows dropper (wt.exe)' }
+    )
+    foreach ($a in $axiosArtifacts) {
+        if (Test-Path $a.Path) {
+            Add-SystemFinding 'RAT' "$($a.Label): $($a.Path)"
+        }
+    }
+    # Per-user temp: 6202033.vbs / 6202033.ps1
+    foreach ($userProfile in (Get-AllUserProfiles)) {
+        foreach ($ext in 'vbs','ps1') {
+            $artifact = Join-Path $userProfile "AppData\Local\Temp\$AXIOS_CAMPAIGN_ID.$ext"
+            if (Test-Path $artifact) {
+                Add-SystemFinding 'RAT' "Axios-attack campaign artifact: $artifact"
+            }
+        }
+    }
+    # Registry persistence: HKCU\...\Run\MicrosoftUpdate
+    try {
+        $regVal = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'MicrosoftUpdate' -ErrorAction SilentlyContinue
+        if ($regVal -and $regVal.MicrosoftUpdate) {
+            Add-SystemFinding 'RAT' "Axios-attack persistence registry key HKCU\...\Run\MicrosoftUpdate -> $($regVal.MicrosoftUpdate)"
+        }
+    } catch { }
 }
 
 # -------------------------------------------------------------------------

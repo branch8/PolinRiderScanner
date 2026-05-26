@@ -80,13 +80,25 @@ CONFIG_FILES="postcss.config.mjs postcss.config.js postcss.config.cjs tailwind.c
 
 # ---------------------------------------------------------------------------
 # Known malicious npm packages
+# (tailwind-* originals + @common-stack/generate-plugin per Sonatype 2026-04;
+#  plain-crypto-js dropper from axios maintainer-hijack 2026-03-31)
 # ---------------------------------------------------------------------------
-MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style"
+MALICIOUS_NPM_PKGS="tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwind-animationbased tailwindcss-typography-style tailwindcss-style-modify tailwindcss-animate-style @common-stack/generate-plugin plain-crypto-js"
+
+# Axios supply-chain attack 2026-03-31 (BlueNoroff / Lazarus)
+AXIOS_BAD_VERSIONS="1.14.1 0.30.4"
+PLAIN_CRYPTO_JS_BAD_VERSION="4.2.1"
 
 # ---------------------------------------------------------------------------
 # C2 infrastructure domains
+# (includes Vercel-hosted TasksJacker endpoints + axios-attack BlueNoroff C2)
 # ---------------------------------------------------------------------------
-C2_DOMAINS="260120.vercel.app default-configuration.vercel.app vscode-settings-bootstrap.vercel.app vscode-settings-config.vercel.app vscode-bootstrapper.vercel.app vscode-load-config.vercel.app"
+C2_DOMAINS="260120.vercel.app default-configuration.vercel.app vscode-settings-bootstrap.vercel.app vscode-settings-config.vercel.app vscode-bootstrapper.vercel.app vscode-load-config.vercel.app sfrclak.com callnrwise.com"
+
+# Axios-attack C2 IP (Hostwinds LLC, port 8000) and campaign markers
+AXIOS_C2_IP="142.11.206.73"
+AXIOS_XOR_KEY="OrDeR_7077"
+AXIOS_CAMPAIGN_ID="6202033"
 
 # Blockchain C2 endpoints
 BLOCKCHAIN_HOSTS="api.trongrid.io fullnode.mainnet.aptoslabs.com bsc-dataseed.binance.org bsc-rpc.publicnode.com"
@@ -869,6 +881,14 @@ IDEEOF
                     finding_count=$((finding_count + 1))
                 fi
             done
+            # Axios maintainer-hijack: only flag the unpublished compromised versions.
+            # Pattern matches `"axios": "...1.14.1..."` etc; tolerant of ^ ~ semver prefixes.
+            for _ax_ver in $AXIOS_BAD_VERSIONS; do
+                if grep -qE "\"axios\"\s*:\s*\"[~^]?${_ax_ver//./\\.}\"" "$pkg_file" 2>/dev/null; then
+                    findings="${findings}  ${RED}-${RESET} ${CYAN}[NPM_PKG]${RESET} ${BOLD}${relpath}${RESET}: Compromised axios@${_ax_ver} (BlueNoroff hijack 2026-03-31)\n"
+                    finding_count=$((finding_count + 1))
+                fi
+            done
             IFS="$old_ifs"
 
             # Flag any non-official package whose name contains "tailwind"
@@ -1499,6 +1519,25 @@ TMPEOF
         fi
     done
     IFS="$old_ifs"
+
+    # Axios-attack RAT persistence artifacts (BlueNoroff/Lazarus, 2026-03-31)
+    if [ -f /tmp/ld.py ]; then
+        add_system_finding "RAT" "Axios-attack Linux RAT: /tmp/ld.py"
+    fi
+    if [ -f /Library/Caches/com.apple.act.mond ]; then
+        add_system_finding "RAT" "Axios-attack macOS RAT: /Library/Caches/com.apple.act.mond"
+    fi
+    # WSL drvfs Windows-side persistence
+    for _pd in /mnt/c/ProgramData /c/ProgramData; do
+        [ -f "${_pd}/system.bat" ] && add_system_finding "RAT" "Axios-attack Windows persistence: ${_pd}/system.bat"
+        [ -f "${_pd}/wt.exe" ] && add_system_finding "RAT" "Axios-attack Windows dropper: ${_pd}/wt.exe"
+    done
+
+    # Axios-attack campaign markers in any temp file
+    while IFS= read -r _mark_file; do
+        [ -n "$_mark_file" ] && add_system_finding "RAT" "Axios-attack signature in temp: ${_mark_file}"
+    done < <(grep -rlF -e "$AXIOS_XOR_KEY" -e "$AXIOS_CAMPAIGN_ID" -e "$AXIOS_C2_IP" \
+        /tmp /var/tmp 2>/dev/null | head -20)
 
     log_verbose "Temp directory scan complete"
 }
